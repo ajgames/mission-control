@@ -13,9 +13,23 @@ import { cn } from "~/utils";
  * What story does YOUR readout tell?
  */
 
-export function HUD() {
+export function HUD({ locked }: { locked: boolean }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
+      {/* ─── "click to engage" prompt — disappears once you're in ─── */}
+      {!locked && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center">
+          <div className="animate-pulse rounded-lg border border-white/10 bg-black/60 px-8 py-5 text-center backdrop-blur-sm">
+            <p className="font-mono text-sm tracking-[0.25em] text-white/80 uppercase">
+              Click to engage controls
+            </p>
+            <p className="mt-2 font-mono text-[10px] tracking-widest text-white/40">
+              WASD to move &middot; Mouse to look &middot; ESC to disengage
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ─── top bar ─── */}
       <div className="flex items-center justify-between px-8 pt-6">
         <div className="flex items-center gap-3">

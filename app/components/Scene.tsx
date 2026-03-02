@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Starfield } from "./Starfield";
 import { Planet } from "./Planet";
 import { Cockpit } from "./Cockpit";
+import { CabinControls } from "./CabinControls";
 import { HUD } from "./HUD";
 
 /*
@@ -26,14 +28,16 @@ import { HUD } from "./HUD";
  */
 
 export function Scene() {
+  const [locked, setLocked] = useState(false);
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
       <Canvas
         camera={{ position: [0, 0, 5], fov: 70, near: 0.1, far: 2000 }}
         gl={{ antialias: true, alpha: false }}
       >
-        {/* ambient light — just enough to see the cockpit panels */}
-        <ambientLight intensity={0.15} />
+        {/* ambient light — the faintest kiss of visibility */}
+        <ambientLight intensity={0.08} />
 
         {/* main light — the star this planet orbits */}
         <directionalLight
@@ -42,19 +46,14 @@ export function Scene() {
           color="#fff5e6"
         />
 
-        {/* fill light — because space has bounce light too (it doesn't, but it looks better) */}
-        <pointLight position={[5, 2, 3]} intensity={0.3} color="#4a90d9" />
-
-        {/* console glow — the instruments illuminate the pilot */}
-        <pointLight position={[0, -3, -3]} intensity={0.4} color="#00d2ff" />
-
+        <CabinControls onLockChange={setLocked} />
         <Starfield />
         <Planet />
         <Cockpit />
       </Canvas>
 
       {/* HTML overlay — floating above the 3D like a ghost with opinions */}
-      <HUD />
+      <HUD locked={locked} />
     </div>
   );
 }
