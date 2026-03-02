@@ -1,13 +1,25 @@
-import type { Route } from "./+types/home";
-import { Welcome } from "../welcome/welcome";
+import { Scene } from "~/components/Scene";
 
-export function meta({}: Route.MetaArgs) {
+/*
+ * 🏠 Home Route
+ * ────────────────────────────────────────────
+ * There's no place like home.
+ * Especially when home is a spaceship cockpit
+ * orbiting an alien world at 7.66 km/s.
+ *
+ * Dorothy had it easy.
+ */
+
+export function meta() {
   return [
-    { title: "New React Router App" },
-    { name: "description", content: "Welcome to React Router!" },
+    { title: "Mission Control" },
+    {
+      name: "description",
+      content: "A spaceship cockpit overlooking a planet. You're the pilot now.",
+    },
   ];
 }
 
 export default function Home() {
-  return <Welcome />;
+  return <Scene />;
 }
