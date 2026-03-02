@@ -5,6 +5,7 @@ import { Planet } from "./Planet";
 import { Cockpit } from "./Cockpit";
 import { CabinControls } from "./CabinControls";
 import { HUD } from "./HUD";
+import { useAmbientAudio } from "~/hooks/useAmbientAudio";
 
 /*
  * 🌌 The Scene
@@ -29,6 +30,9 @@ import { HUD } from "./HUD";
 
 export function Scene() {
   const [locked, setLocked] = useState(false);
+
+  // 🎵 the ship hums whether you're at the helm or not
+  useAmbientAudio("/space-theme-positive.wav", locked);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
