@@ -2,6 +2,9 @@ import { useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Starfield } from "./Starfield";
 import { Planet } from "./Planet";
+import { Sun } from "./Sun";
+import { Moon } from "./Moon";
+import { Nebula } from "./Nebula";
 import { Cockpit } from "./Cockpit";
 import { CabinControls } from "./CabinControls";
 import { HUD } from "./HUD";
@@ -40,19 +43,22 @@ export function Scene() {
         camera={{ position: [0, 0, 5], fov: 70, near: 0.1, far: 2000 }}
         gl={{ antialias: true, alpha: false }}
       >
-        {/* ambient light — the faintest kiss of visibility */}
-        <ambientLight intensity={0.08} />
+        {/* ambient light — enough to see the walls have walls */}
+        <ambientLight intensity={0.2} color="#2a1f4e" />
 
-        {/* main light — the star this planet orbits */}
+        {/* main light — now aimed INTO the scene so the planet's pretty side faces us */}
         <directionalLight
-          position={[-50, 30, -80]}
+          position={[-60, 40, 40]}
           intensity={2}
           color="#fff5e6"
         />
 
         <CabinControls onLockChange={setLocked} />
+        <Nebula />
+        <Sun />
         <Starfield />
         <Planet />
+        <Moon />
         <Cockpit />
       </Canvas>
 
