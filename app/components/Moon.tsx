@@ -31,8 +31,11 @@ export function Moon() {
 
   // 🎠 orbit radius 200 — the ship sits at ~128 units from the planet,
   //    so we're safely inside her path, watching her drift by overhead
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime() * 0.08;
+  const elapsed = useRef(0);
+
+  useFrame((_, delta) => {
+    elapsed.current += delta;
+    const t = elapsed.current * 0.08;
     const orbitRadius = 200;
     ref.current.position.set(
       Math.cos(t) * orbitRadius,

@@ -1,6 +1,15 @@
 import { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import {
+  createWallNormalMap,
+  createWallRoughnessMap,
+  createFloorNormalMap,
+  createFloorRoughnessMap,
+  createCeilingNormalMap,
+  createCeilingRoughnessMap,
+  createTrimNormalMap,
+} from "~/utils/cockpitTextures";
 
 /*
  * 🛸 The Cockpit v3 — Gemini Configuration
@@ -29,29 +38,75 @@ import * as THREE from "three";
  */
 
 export function Cockpit() {
-  const panelMaterial = useMemo(
-    () =>
-      new THREE.MeshStandardMaterial({
-        color: "#2a2045",
-        roughness: 0.7,
-        metalness: 0.3,
-        emissive: "#1a1535",
-        emissiveIntensity: 0.15,
-      }),
-    []
-  );
+  /*
+   * 🎨 Hull Surface Materials — the skin of the ship
+   * ─────────────────────────────────────────────────
+   * Each surface gets its own procedural normal + roughness maps,
+   * generated once on canvas and never touched again. The textures
+   * add panel seams, deck plating, and machined edges that catch
+   * light from every angle — turning flat geometry into something
+   * that looks like it was assembled in a drydock, not a code editor.
+   *
+   *   walls   → 4×3 panel grid with bolt rivets
+   *   floor   → horizontal deck stripes with diamond tread
+   *   ceiling → 3×2 recessed panels, wide soft bevels
+   *   trim    → 45° cross-hatch knurling
+   */
 
-  const trimMaterial = useMemo(
-    () =>
-      new THREE.MeshStandardMaterial({
-        color: "#3d2d6b",
-        roughness: 0.4,
-        metalness: 0.5,
-        emissive: "#1a1248",
-        emissiveIntensity: 0.3,
-      }),
-    []
-  );
+  const wallMaterial = useMemo(() => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: "#2a2045",
+      roughness: 0.7,
+      metalness: 0.3,
+      emissive: "#1a1535",
+      emissiveIntensity: 0.15,
+      normalMap: createWallNormalMap(),
+      normalScale: new THREE.Vector2(0.6, 0.6),
+      roughnessMap: createWallRoughnessMap(),
+    });
+    return mat;
+  }, []);
+
+  const floorMaterial = useMemo(() => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: "#2a2045",
+      roughness: 0.7,
+      metalness: 0.3,
+      emissive: "#1a1535",
+      emissiveIntensity: 0.15,
+      normalMap: createFloorNormalMap(),
+      normalScale: new THREE.Vector2(0.8, 0.8),
+      roughnessMap: createFloorRoughnessMap(),
+    });
+    return mat;
+  }, []);
+
+  const ceilingMaterial = useMemo(() => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: "#2a2045",
+      roughness: 0.7,
+      metalness: 0.3,
+      emissive: "#1a1535",
+      emissiveIntensity: 0.15,
+      normalMap: createCeilingNormalMap(),
+      normalScale: new THREE.Vector2(0.5, 0.5),
+      roughnessMap: createCeilingRoughnessMap(),
+    });
+    return mat;
+  }, []);
+
+  const trimMaterial = useMemo(() => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: "#3d2d6b",
+      roughness: 0.4,
+      metalness: 0.5,
+      emissive: "#1a1248",
+      emissiveIntensity: 0.3,
+      normalMap: createTrimNormalMap(),
+      normalScale: new THREE.Vector2(0.3, 0.3),
+    });
+    return mat;
+  }, []);
 
   return (
     <group>
@@ -60,27 +115,27 @@ export function Cockpit() {
        * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */}
 
       {/* ─── left wall ─── */}
-      <mesh position={[-12, 0, -2]} material={panelMaterial}>
+      <mesh position={[-12, 0, -2]} material={wallMaterial}>
         <boxGeometry args={[1, 14, 20]} />
       </mesh>
 
       {/* ─── right wall ─── */}
-      <mesh position={[12, 0, -2]} material={panelMaterial}>
+      <mesh position={[12, 0, -2]} material={wallMaterial}>
         <boxGeometry args={[1, 14, 20]} />
       </mesh>
 
       {/* ─── ceiling ─── */}
-      <mesh position={[0, 7, -2]} material={panelMaterial}>
+      <mesh position={[0, 7, -2]} material={ceilingMaterial}>
         <boxGeometry args={[25, 1, 20]} />
       </mesh>
 
       {/* ─── floor — solid, no peeking at the void ─── */}
-      <mesh position={[0, -5.5, -2]} material={panelMaterial}>
+      <mesh position={[0, -5.5, -2]} material={floorMaterial}>
         <boxGeometry args={[25, 1, 20]} />
       </mesh>
 
       {/* ─── back wall ─── */}
-      <mesh position={[0, 0, 8]} material={panelMaterial}>
+      <mesh position={[0, 0, 8]} material={wallMaterial}>
         <boxGeometry args={[25, 13.5, 1]} />
       </mesh>
 
@@ -103,16 +158,16 @@ export function Cockpit() {
        *  FRONT WALL — viewport and bulkhead
        * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */}
 
-      <mesh position={[0, -4.25, -11]} material={panelMaterial}>
+      <mesh position={[0, -4.25, -11]} material={wallMaterial}>
         <boxGeometry args={[25, 3.5, 1]} />
       </mesh>
-      <mesh position={[0, 6.25, -11]} material={panelMaterial}>
+      <mesh position={[0, 6.25, -11]} material={wallMaterial}>
         <boxGeometry args={[25, 2.5, 1]} />
       </mesh>
-      <mesh position={[-11.25, 1, -11]} material={panelMaterial}>
+      <mesh position={[-11.25, 1, -11]} material={wallMaterial}>
         <boxGeometry args={[2.5, 8, 1]} />
       </mesh>
-      <mesh position={[11.25, 1, -11]} material={panelMaterial}>
+      <mesh position={[11.25, 1, -11]} material={wallMaterial}>
         <boxGeometry args={[2.5, 8, 1]} />
       </mesh>
 
@@ -322,9 +377,11 @@ function CeilingPaneling({
 function CeilingLightBar({ z }: { z: number }) {
   const leftRef = useRef<THREE.Mesh>(null!);
   const rightRef = useRef<THREE.Mesh>(null!);
+  const elapsed = useRef(0);
 
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime * 0.6 + z * 0.3;
+  useFrame((_, delta) => {
+    elapsed.current += delta;
+    const t = elapsed.current * 0.6 + z * 0.3;
     const intensity = 1.0 + Math.sin(t) * 0.25;
     for (const ref of [leftRef, rightRef]) {
       if (ref.current) {
@@ -389,11 +446,14 @@ function WallLightBar({ side, z }: { side: "left" | "right"; z: number }) {
   const glowX = side === "left" ? -11.35 : 11.35;
   const offset = side === "left" ? 0 : Math.PI;
 
-  useFrame(({ clock }) => {
+  const elapsed = useRef(0);
+
+  useFrame((_, delta) => {
+    elapsed.current += delta;
     if (ref.current) {
       const mat = ref.current.material as THREE.MeshStandardMaterial;
       mat.emissiveIntensity =
-        0.8 + Math.sin(clock.elapsedTime * 0.4 + offset + z * 0.5) * 0.2;
+        0.8 + Math.sin(elapsed.current * 0.4 + offset + z * 0.5) * 0.2;
     }
   });
 
@@ -582,11 +642,14 @@ function Pedestal({
 }) {
   const glowRef = useRef<THREE.Mesh>(null!);
 
-  useFrame(({ clock }) => {
+  const elapsed = useRef(0);
+
+  useFrame((_, delta) => {
+    elapsed.current += delta;
     if (glowRef.current) {
       const mat = glowRef.current.material as THREE.MeshStandardMaterial;
       mat.emissiveIntensity =
-        0.7 + Math.sin(clock.elapsedTime * 0.6 + index * 1.1) * 0.3;
+        0.7 + Math.sin(elapsed.current * 0.6 + index * 1.1) * 0.3;
     }
   });
 
@@ -675,9 +738,12 @@ function Pedestal({
 function ViewportGlow() {
   const ref = useRef<THREE.Group>(null!);
 
-  useFrame(({ clock }) => {
+  const elapsed = useRef(0);
+
+  useFrame((_, delta) => {
+    elapsed.current += delta;
     if (ref.current) {
-      const intensity = 1.2 + Math.sin(clock.elapsedTime * 0.8) * 0.4;
+      const intensity = 1.2 + Math.sin(elapsed.current * 0.8) * 0.4;
       ref.current.children.forEach((child) => {
         const mesh = child as THREE.Mesh;
         if (mesh.material) {

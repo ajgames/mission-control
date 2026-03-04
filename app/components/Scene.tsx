@@ -35,7 +35,7 @@ export function Scene() {
   const [locked, setLocked] = useState(false);
 
   // 🎵 the ship hums whether you're at the helm or not
-  useAmbientAudio("/space-theme-positive.wav", locked);
+  useAmbientAudio("/space-ambient-low.wav", locked);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
