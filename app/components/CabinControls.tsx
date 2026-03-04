@@ -72,6 +72,7 @@ export function CabinControls({
   virtualKeys,
   joystick,
   universeRef,
+  cockpitRef,
 }: CabinControlsProps) {
   const { camera, gl } = useThree();
   const euler = useRef(new THREE.Euler(0, 0, 0, "YXZ"));
@@ -133,15 +134,19 @@ export function CabinControls({
     camera.quaternion.copy(savedCameraQuat.current);
     euler.current.setFromQuaternion(camera.quaternion);
 
-    // reset the universe back to origin — the ship stops here
+    // reset everything back to origin — the ship stops here
     if (universeRef?.current) {
       universeRef.current.position.set(0, 0, 0);
+    }
+    if (cockpitRef?.current) {
+      cockpitRef.current.position.set(0, 0, 0);
+      cockpitRef.current.quaternion.identity();
     }
     shipWorldPos.current.set(0, 0, 0);
 
     helmActive.current = false;
     onNavModeChange?.(false);
-  }, [camera, onNavModeChange, universeRef]);
+  }, [camera, onNavModeChange, universeRef, cockpitRef]);
 
   /* ─── Desktop: mouse look ─── */
   const onMouseMove = useCallback(
@@ -378,19 +383,29 @@ export function CabinControls({
         shipVelocity.current.set(0, 0, 0);
       }
 
-      // ── 4. integrate position ──
-      // the ship stays at origin — the universe moves around it
-      // camera is pinned to the helm seat, looking out
+      // ── 4. integrate position & rotation ──
+      // camera is pinned to the helm seat
       camera.position.copy(HELM_POSITION);
       shipWorldPos.current.addScaledVector(shipVelocity.current, dt);
 
+      // universe slides opposite to where the ship is heading
       if (universeRef?.current) {
-        // universe slides opposite to where the ship is heading
         universeRef.current.position.set(
           -shipWorldPos.current.x,
           -shipWorldPos.current.y,
           -shipWorldPos.current.z
         );
+      }
+
+      // cockpit rotates with the ship, pivoting around the helm seat
+      // so the walls, floor, and console all move with you as you pitch & roll
+      if (cockpitRef?.current) {
+        cockpitRef.current.quaternion.copy(shipQuaternion.current);
+        // pivot around HELM_POSITION: translate to pivot, rotate, translate back
+        const offset = HELM_POSITION.clone().negate();
+        offset.applyQuaternion(shipQuaternion.current);
+        offset.add(HELM_POSITION);
+        cockpitRef.current.position.copy(offset);
       }
 
       return;
@@ -465,4 +480,5 @@ interface CabinControlsProps {
   virtualKeys?: { current: Set<string> };
   joystick?: { current: { x: number; z: number } };
   universeRef?: React.RefObject<THREE.Group>;
+  cockpitRef?: React.RefObject<THREE.Group>;
 }

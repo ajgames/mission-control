@@ -48,6 +48,9 @@ export function Scene() {
   // (because in space, everything is relative, and the ship is always at center stage)
   const universeRef = useRef<THREE.Group>(null!);
 
+  // 🛸 the cockpit group — rotates around the helm seat during flight
+  const cockpitRef = useRef<THREE.Group>(null!);
+
   // 🎵 the ship hums whether you're at the helm or not
   useAmbientAudio("/space-ambient-low.wav", locked);
 
@@ -75,6 +78,7 @@ export function Scene() {
           virtualKeys={virtualKeys}
           joystick={joystick}
           universeRef={universeRef}
+          cockpitRef={cockpitRef}
         />
 
         {/* 🌌 the universe — this group moves when the ship flies */}
@@ -86,8 +90,10 @@ export function Scene() {
           <Moon />
         </group>
 
-        {/* 🛸 the cockpit stays at origin — it IS the ship */}
-        <Cockpit />
+        {/* 🛸 the cockpit — rotates with the ship during helm mode */}
+        <group ref={cockpitRef}>
+          <Cockpit />
+        </group>
       </Canvas>
 
       {/* HTML overlay — floating above the 3D like a ghost with opinions */}
