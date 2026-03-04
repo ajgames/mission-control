@@ -600,31 +600,26 @@ function ChevronLine({
 }
 
 /*
- * 🖥️ Console Pedestals
+ * 🖥️ The Helm Pedestal
  * ──────────────────────
- * Six monoliths in a crescent, each one a standing
- * workstation with a glowing face. In the Gemini
- * blueprints these are called "interface pylons."
- * The crew called them "the choir."
+ * One monolith. Dead center. Facing the void.
  *
- * They don't sing. They do look like they might
- * start at any moment.
+ * The Gemini blueprints originally called for six
+ * "interface pylons" in a choir formation. But the
+ * crew voted: one pilot, one console, one purpose.
+ *
+ * Walk up. Press E. Become the ship.
+ *
+ *        ╔═══════════╗
+ *        ║  ▓▓▓▓▓▓▓  ║  ← the viewport
+ *        ║  ▓▓▓▓▓▓▓  ║
+ *        ╚═══════════╝
+ *            ▐██▌       ← you are here
  */
 function ConsolePedestals() {
-  const positions = [
-    { x: -7, z: -4, rotY: 0.3 },
-    { x: -4, z: -6, rotY: 0.15 },
-    { x: -1.2, z: -7, rotY: 0.05 },
-    { x: 1.2, z: -7, rotY: -0.05 },
-    { x: 4, z: -6, rotY: -0.15 },
-    { x: 7, z: -4, rotY: -0.3 },
-  ];
-
   return (
     <group>
-      {positions.map((pos, i) => (
-        <Pedestal key={i} {...pos} index={i} />
-      ))}
+      <Pedestal x={0} z={-7} rotY={0} index={0} />
     </group>
   );
 }
