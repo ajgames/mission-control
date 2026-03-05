@@ -1,4 +1,7 @@
+import { useRef, useEffect } from "react";
+import * as THREE from "three";
 import { cn } from "~/utils";
+import { getVisualDistanceToSurface } from "~/utils/grandnessEffect";
 
 /*
  * 📡 The HUD (Heads-Up Display)
@@ -21,11 +24,35 @@ export function HUD({
   locked,
   navMode,
   isMobile = false,
-}: {
-  locked: boolean;
-  navMode?: boolean;
-  isMobile?: boolean;
-}) {
+  shipWorldPosRef,
+}: HUDProps) {
+  /*
+   * 📏 Live distance readout — updated imperatively via rAF
+   * because React re-renders at 60fps would make the GC weep.
+   * We grab the DOM element by ref and write textContent directly,
+   * like a pilot scribbling on the windshield with a grease pencil.
+   */
+  const distanceElRef = useRef<HTMLSpanElement>(null);
+  const cabinDistanceElRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!shipWorldPosRef) return;
+
+    let frameId: number;
+    const tick = () => {
+      if (shipWorldPosRef.current) {
+        const d = getVisualDistanceToSurface(shipWorldPosRef.current);
+        const text = d.toFixed(1);
+        if (distanceElRef.current) distanceElRef.current.textContent = text;
+        if (cabinDistanceElRef.current)
+          cabinDistanceElRef.current.textContent = text;
+      }
+      frameId = requestAnimationFrame(tick);
+    };
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [shipWorldPosRef]);
+
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // 🚀 HELM HUD — flight instruments
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -82,7 +109,16 @@ export function HUD({
         {/* ─── right panel — ship systems ─── */}
         <div className="absolute top-1/2 right-8 -translate-y-1/2 space-y-5 text-right">
           <Readout label="ROLL" value="0.0" unit="°" align="right" />
-          <Readout label="ALT" value="340.2" unit="km" align="right" />
+          {/* 🪐 live distance to planet surface — the number that haunts Zeno */}
+          <div className="font-mono text-right">
+            <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
+              DIST
+            </div>
+            <div className="text-sm text-white/80">
+              <span ref={distanceElRef}>--</span>
+              <span className="ml-1 text-[10px] text-white/40">su</span>
+            </div>
+          </div>
           <Readout label="FUEL" value="87" unit="%" align="right" />
           <Readout label="HULL" value="100" unit="%" align="right" />
         </div>
@@ -175,6 +211,16 @@ export function HUD({
         <Readout label="LAT" value="28.524" unit="°N" align="right" />
         <Readout label="LON" value="-80.65" unit="°W" align="right" />
         <Readout label="COM" value="CH-07" align="right" />
+        {/* 🪐 how far away the planet is — visible from the cabin windows too */}
+        <div className="font-mono text-right">
+          <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
+            DIST
+          </div>
+          <div className="text-sm text-white/80">
+            <span ref={cabinDistanceElRef}>--</span>
+            <span className="ml-1 text-[10px] text-white/40">su</span>
+          </div>
+        </div>
       </div>
 
       {/* ─── bottom status bar ─── */}
@@ -341,4 +387,13 @@ function HelmBracket({
       )}
     />
   );
+}
+
+/* ─── Props at the bottom, as is tradition ─── */
+
+interface HUDProps {
+  locked: boolean;
+  navMode?: boolean;
+  isMobile?: boolean;
+  shipWorldPosRef?: React.RefObject<THREE.Vector3>;
 }
