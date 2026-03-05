@@ -107,6 +107,8 @@ export function Planet({ shipWorldPosRef }: PlanetProps) {
           .material as THREE.MeshStandardMaterial;
 
         planetMat.map = textures.surface[newLOD];
+        planetMat.bumpMap = textures.bump[newLOD];
+        planetMat.bumpScale = newLOD >= 2 ? 2.5 : 0.8;
         planetMat.needsUpdate = true;
         cloudMat.map = textures.cloud[newLOD];
         cloudMat.needsUpdate = true;
@@ -138,7 +140,12 @@ export function Planet({ shipWorldPosRef }: PlanetProps) {
       {/* the planet herself — starts at LOD 0 (distant marble) */}
       <mesh ref={planetRef}>
         <sphereGeometry args={[40, 64, 64]} />
-        <meshStandardMaterial map={textures.surface[0]} roughness={0.8} />
+        <meshStandardMaterial
+          map={textures.surface[0]}
+          bumpMap={textures.bump[0]}
+          bumpScale={0.8}
+          roughness={0.8}
+        />
       </mesh>
 
       {/* cloud layer — slightly larger, slightly mysterious */}

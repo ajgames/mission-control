@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
 import { Starfield } from "./Starfield";
@@ -7,6 +7,7 @@ import { Sun } from "./Sun";
 import { Moon } from "./Moon";
 import { Nebula } from "./Nebula";
 import { Cockpit } from "./Cockpit";
+import { Terrain } from "./Terrain";
 import { CabinControls } from "./CabinControls";
 import { HUD } from "./HUD";
 import { MobileControls } from "./MobileControls";
@@ -17,13 +18,18 @@ import { useIsMobile } from "~/hooks/useIsMobile";
  * 🌌 The Scene
  * ────────────────────────────────────────────
  * This is where it all comes together.
- * Canvas meets cockpit meets cosmos.
+ * Canvas meets cockpit meets cosmos meets... ground?
  *
  * Three.js renders the universe.
  * HTML renders the interface.
  * Together they render... meaning? Maybe.
  *
  * At least they render at 60fps.
+ *
+ * Now with THREE control modes:
+ *   🚶 cabin  — walk around the tin can
+ *   🚀 helm   — fly the ship
+ *   🌍 surface — walk on the planet
  *
  *    "The universe is under no obligation
  *     to make sense to you."
@@ -37,7 +43,8 @@ import { useIsMobile } from "~/hooks/useIsMobile";
 
 export function Scene() {
   const [locked, setLocked] = useState(false);
-  const [navMode, setNavMode] = useState(false);
+  const [controlMode, setControlMode] = useState<ControlMode>("cabin");
+  const [landed, setLanded] = useState(false);
   const isMobile = useIsMobile();
 
   // 🕹️ shared refs — the bridge between HTML buttons and the 3D frame loop
@@ -58,6 +65,15 @@ export function Scene() {
   // 🏎️ the ship's velocity — how fast she's moving relative to the planet
   // three numbers that tell you everything: am I closing, drifting, or falling?
   const shipVelocityRef = useRef(new THREE.Vector3());
+
+  // 🏔️ terrain mesh ref — CabinControls raycasts against this for landing and walking
+  const terrainMeshRef = useRef<THREE.Mesh | null>(null);
+  const handleTerrainMeshReady = useCallback((mesh: THREE.Mesh) => {
+    terrainMeshRef.current = mesh;
+  }, []);
+
+  // backward-compat: derive navMode boolean for components that still speak boolean
+  const navMode = controlMode === "helm";
 
   // 🎵 the ship hums whether you're at the helm or not
   useAmbientAudio("/space-ambient-low.wav", locked);
@@ -80,8 +96,8 @@ export function Scene() {
 
         <CabinControls
           onLockChange={setLocked}
-          onNavModeChange={setNavMode}
-          navMode={navMode}
+          onControlModeChange={setControlMode}
+          controlMode={controlMode}
           isMobile={isMobile}
           virtualKeys={virtualKeys}
           joystick={joystick}
@@ -89,6 +105,8 @@ export function Scene() {
           cockpitRef={cockpitRef}
           shipWorldPosRef={shipWorldPosRef}
           shipVelocityRef={shipVelocityRef}
+          terrainMeshRef={terrainMeshRef}
+          onLandedChange={setLanded}
         />
 
         {/* 🌌 the universe — this group moves when the ship flies */}
@@ -98,16 +116,29 @@ export function Scene() {
           <Starfield />
           <Planet shipWorldPosRef={shipWorldPosRef} />
           <Moon />
+
+          {/* 🏔️ terrain — the non-Euclidean ground that appears at close range */}
+          <Terrain
+            shipWorldPosRef={shipWorldPosRef}
+            onTerrainMeshReady={handleTerrainMeshReady}
+          />
         </group>
 
-        {/* 🛸 the cockpit — rotates with the ship during helm mode */}
-        <group ref={cockpitRef}>
+        {/* 🛸 the cockpit — rotates with the ship during helm mode, hidden on surface */}
+        <group ref={cockpitRef} visible={controlMode !== "surface"}>
           <Cockpit />
         </group>
       </Canvas>
 
       {/* HTML overlay — floating above the 3D like a ghost with opinions */}
-      <HUD locked={locked} navMode={navMode} isMobile={isMobile} shipWorldPosRef={shipWorldPosRef} shipVelocityRef={shipVelocityRef} />
+      <HUD
+        locked={locked}
+        controlMode={controlMode}
+        isMobile={isMobile}
+        shipWorldPosRef={shipWorldPosRef}
+        shipVelocityRef={shipVelocityRef}
+        landed={landed}
+      />
 
       {/* 📱 mobile gamepad — for thumb-piloting through the cosmos */}
       {isMobile && locked && (
@@ -116,3 +147,7 @@ export function Scene() {
     </div>
   );
 }
+
+/* ─── Types at the bottom, as is tradition ─── */
+
+export type ControlMode = "cabin" | "helm" | "surface";

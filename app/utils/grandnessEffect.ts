@@ -35,6 +35,23 @@ export const PLANET_LOCAL_POS = new Vector3(30, 5, -120);
 export const PLANET_RADIUS = 40;
 
 /*
+ * 🏔️ Terrain transition thresholds
+ * ──────────────────────────────────
+ * The non-Euclidean handoff: sphere → terrain plane.
+ *
+ * At TERRAIN_APPEAR_DIST the plane fades in, ghostlike.
+ * At TERRAIN_OPAQUE_DIST it's fully solid — you see ground, not sphere.
+ * At LANDING_DIST the Zeno field has you crawling. Time to land.
+ *
+ *   d = 10  →  terrain shimmers into existence (330× scale)
+ *   d = 5   →  terrain is real. mountains have shadows. (1000× scale)
+ *   d = 3   →  Zeno says "you're here." thrust at 1%. (1800× scale)
+ */
+export const TERRAIN_APPEAR_DIST = 10;
+export const TERRAIN_OPAQUE_DIST = 5;
+export const LANDING_DIST = 3;
+
+/*
  * 🍎 GM — the gravitational parameter
  * ────────────────────────────────────
  * Newton's apple, but in space. No tree required.

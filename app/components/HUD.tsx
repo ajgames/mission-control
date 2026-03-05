@@ -2,6 +2,7 @@ import { useRef, useEffect } from "react";
 import * as THREE from "three";
 import { cn } from "~/utils";
 import { getVisualDistanceToSurface, PLANET_LOCAL_POS, GM } from "~/utils/grandnessEffect";
+import type { ControlMode } from "./Scene";
 
 /*
  * 📡 The HUD (Heads-Up Display)
@@ -11,9 +12,10 @@ import { getVisualDistanceToSurface, PLANET_LOCAL_POS, GM } from "~/utils/grandn
  * the Three.js canvas because sometimes the best
  * tech is the simplest tech.
  *
- * Two faces:
- *   🚶 CABIN HUD — mission readouts, orbit data, system status
- *   🚀 HELM HUD  — flight instruments, velocity vector, control hints
+ * Three faces now:
+ *   🚶 CABIN HUD   — mission readouts, orbit data, system status
+ *   🚀 HELM HUD    — flight instruments, velocity vector, control hints
+ *   🌍 SURFACE HUD — compass, distance-to-ship, altitude. minimal.
  *
  * If you're adding new readouts, remember:
  * every good cockpit tells a story.
@@ -22,22 +24,20 @@ import { getVisualDistanceToSurface, PLANET_LOCAL_POS, GM } from "~/utils/grandn
 
 export function HUD({
   locked,
-  navMode,
+  controlMode = "cabin",
   isMobile = false,
   shipWorldPosRef,
   shipVelocityRef,
+  landed = false,
 }: HUDProps) {
   /*
    * 📏 Live distance readout — updated imperatively via rAF
    * because React re-renders at 60fps would make the GC weep.
-   * We grab the DOM element by ref and write textContent directly,
-   * like a pilot scribbling on the windshield with a grease pencil.
    */
   const distanceElRef = useRef<HTMLSpanElement>(null);
   const cabinDistanceElRef = useRef<HTMLSpanElement>(null);
 
-  // 🏎️ velocity readout refs — three axes, two HUD modes, all updated imperatively
-  // because six setState calls at 60fps is how you make React cry
+  // 🏎️ velocity readout refs
   const velXRef = useRef<HTMLSpanElement>(null);
   const velYRef = useRef<HTMLSpanElement>(null);
   const velZRef = useRef<HTMLSpanElement>(null);
@@ -45,7 +45,7 @@ export function HUD({
   const cabinVelYRef = useRef<HTMLSpanElement>(null);
   const cabinVelZRef = useRef<HTMLSpanElement>(null);
 
-  // 🛸 orbital velocity readout — the number that tells you if you're flying or falling
+  // 🛸 orbital velocity readout
   const orbVelElRef = useRef<HTMLSpanElement>(null);
   const orbTargetElRef = useRef<HTMLSpanElement>(null);
   const orbPercentElRef = useRef<HTMLSpanElement>(null);
@@ -64,7 +64,7 @@ export function HUD({
           cabinDistanceElRef.current.textContent = text;
       }
 
-      // 🏎️ velocity — planet-relative, three axes
+      // 🏎️ velocity
       if (shipVelocityRef?.current) {
         const v = shipVelocityRef.current;
         const vx = v.x.toFixed(2);
@@ -77,14 +77,7 @@ export function HUD({
         if (cabinVelYRef.current) cabinVelYRef.current.textContent = vy;
         if (cabinVelZRef.current) cabinVelZRef.current.textContent = vz;
 
-        /*
-         * 🛸 Orbital velocity decomposition
-         * ──────────────────────────────────
-         * Split velocity into radial (toward/away from planet)
-         * and tangential (sideways / orbital). The tangential
-         * component is the one that keeps you in orbit.
-         * When it matches sqrt(GM/r), you're Kepler's favorite.
-         */
+        // orbital velocity decomposition
         if (shipWorldPosRef?.current) {
           const toPlanet = PLANET_LOCAL_POS.clone().sub(shipWorldPosRef.current);
           const r = toPlanet.length();
@@ -113,9 +106,75 @@ export function HUD({
   }, [shipWorldPosRef, shipVelocityRef]);
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 🌍 SURFACE HUD — you're standing on a world
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  if (controlMode === "surface") {
+    return (
+      <div className="pointer-events-none absolute inset-0 z-10">
+        {/* ─── surface mode banner ─── */}
+        <div className="flex items-center justify-center pt-6">
+          <div
+            className={cn(
+              "rounded border border-emerald-400/30 bg-black/50 px-6 py-2 backdrop-blur-sm",
+              "shadow-[0_0_20px_rgba(52,211,153,0.15)]"
+            )}
+          >
+            <span className="font-mono text-xs tracking-[0.4em] text-emerald-400 uppercase">
+              ⟐ Surface ⟐
+            </span>
+          </div>
+        </div>
+
+        {/* ─── left panel — minimal readouts ─── */}
+        <div className="absolute top-1/2 left-8 -translate-y-1/2 space-y-4">
+          <div className="font-mono">
+            <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
+              DIST
+            </div>
+            <div className="text-sm text-white/80">
+              <span ref={distanceElRef}>--</span>
+              <span className="ml-1 text-[10px] text-white/40">su</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ─── bottom prompt ─── */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
+          <div
+            className={cn(
+              "flex flex-col items-center gap-2 rounded-lg",
+              "border border-white/10 bg-black/40 px-8 py-3 backdrop-blur-sm"
+            )}
+          >
+            <div className="flex items-center gap-6">
+              <HelmKey label="W" desc="FWD" color="emerald" />
+              <HelmKey label="S" desc="BACK" color="emerald" />
+              <HelmKey label="A" desc="LEFT" color="emerald" />
+              <HelmKey label="D" desc="RIGHT" color="emerald" />
+              <span className="mx-1 text-white/20">│</span>
+              <span className="font-mono text-[10px] tracking-wider text-white/40">
+                🖱 LOOK AROUND
+              </span>
+            </div>
+            <span className="font-mono text-[10px] tracking-[0.2em] text-amber-400/60 uppercase">
+              Press F to re-board ship
+            </span>
+          </div>
+        </div>
+
+        {/* ─── corner brackets — earthy tones for surface mode ─── */}
+        <SurfaceBracket position="top-left" />
+        <SurfaceBracket position="top-right" />
+        <SurfaceBracket position="bottom-left" />
+        <SurfaceBracket position="bottom-right" />
+      </div>
+    );
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // 🚀 HELM HUD — flight instruments
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  if (navMode) {
+  if (controlMode === "helm") {
     return (
       <div className="pointer-events-none absolute inset-0 z-10">
         {/* ─── helm mode banner ─── */}
@@ -127,16 +186,31 @@ export function HUD({
             )}
           >
             <span className="font-mono text-xs tracking-[0.4em] text-cyan-400 uppercase">
-              ⟐ Helm Active ⟐
+              {landed ? "⟐ Landed ⟐" : "⟐ Helm Active ⟐"}
             </span>
           </div>
         </div>
 
-        {/* ─── crosshair — your heading indicator ─── */}
+        {/* ─── LANDED overlay ─── */}
+        {landed && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2">
+            <div
+              className={cn(
+                "rounded border border-emerald-400/40 bg-emerald-950/50 px-6 py-2 backdrop-blur-sm",
+                "shadow-[0_0_20px_rgba(52,211,153,0.2)]",
+                "animate-pulse"
+              )}
+            >
+              <span className="font-mono text-sm tracking-[0.3em] text-emerald-400 uppercase">
+                🌍 Surface Contact
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* ─── crosshair ─── */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-          {/* center dot */}
           <div className="h-1.5 w-1.5 rounded-full bg-cyan-400/60 shadow-[0_0_6px_rgba(34,211,238,0.4)]" />
-          {/* horizontal ticks */}
           <div className="absolute top-1/2 left-1/2 -translate-y-1/2 -translate-x-1/2">
             <div className="absolute -left-6 top-0 h-px w-3 bg-cyan-400/40" />
             <div className="absolute left-4 top-0 h-px w-3 bg-cyan-400/40" />
@@ -160,7 +234,6 @@ export function HUD({
               </div>
             </div>
           </div>
-          {/* 🏎️ velocity relative to the planet — three axes of truth */}
           <VelocityTriad
             xRef={velXRef}
             yRef={velYRef}
@@ -171,7 +244,6 @@ export function HUD({
         {/* ─── right panel — ship systems ─── */}
         <div className="absolute top-1/2 right-8 -translate-y-1/2 space-y-5 text-right">
           <Readout label="ROLL" value="0.0" unit="°" align="right" />
-          {/* 🪐 live distance to planet surface — the number that haunts Zeno */}
           <div className="font-mono text-right">
             <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
               DIST
@@ -181,12 +253,6 @@ export function HUD({
               <span className="ml-1 text-[10px] text-white/40">su</span>
             </div>
           </div>
-          {/*
-           * 🛸 ORB — the orbital velocity gauge
-           * Shows tangential speed / target orbital speed
-           * When the numbers match, you're in orbit.
-           * When they don't, you're just falling with style.
-           */}
           <div className="font-mono text-right">
             <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
               ORB
@@ -225,12 +291,14 @@ export function HUD({
               </span>
             </div>
             <span className="font-mono text-[10px] tracking-[0.2em] text-amber-400/60 uppercase">
-              Press E or ESC to disengage helm
+              {landed
+                ? "Press F to disembark · E to disengage helm"
+                : "Press E or ESC to disengage helm"}
             </span>
           </div>
         </div>
 
-        {/* ─── corner brackets — tighter in helm mode ─── */}
+        {/* ─── corner brackets ─── */}
         <HelmBracket position="top-left" />
         <HelmBracket position="top-right" />
         <HelmBracket position="bottom-left" />
@@ -244,7 +312,7 @@ export function HUD({
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
-      {/* ─── engagement prompt — on mobile we auto-engage, so skip this ─── */}
+      {/* ─── engagement prompt ─── */}
       {!locked && !isMobile && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center">
           <div className="animate-pulse rounded-lg border border-white/10 bg-black/60 px-8 py-5 text-center backdrop-blur-sm">
@@ -285,7 +353,6 @@ export function HUD({
       {/* ─── left readouts ─── */}
       <div className="absolute top-1/2 left-8 -translate-y-1/2 space-y-4">
         <Readout label="ALT" value="340.2" unit="km" />
-        {/* 🏎️ planet-relative velocity — even from the cabin you can feel the drift */}
         <VelocityTriad
           xRef={cabinVelXRef}
           yRef={cabinVelYRef}
@@ -299,7 +366,6 @@ export function HUD({
         <Readout label="LAT" value="28.524" unit="°N" align="right" />
         <Readout label="LON" value="-80.65" unit="°W" align="right" />
         <Readout label="COM" value="CH-07" align="right" />
-        {/* 🪐 how far away the planet is — visible from the cabin windows too */}
         <div className="font-mono text-right">
           <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
             DIST
@@ -326,7 +392,7 @@ export function HUD({
         </div>
       </div>
 
-      {/* ─── E to helm prompt (only when locked and walking around) ─── */}
+      {/* ─── E to helm prompt ─── */}
       {locked && (
         <div className="absolute bottom-20 left-1/2 -translate-x-1/2">
           <span className="font-mono text-[10px] tracking-[0.2em] text-white/30 uppercase">
@@ -335,7 +401,7 @@ export function HUD({
         </div>
       )}
 
-      {/* ─── corner brackets (that sci-fi framing everyone loves) ─── */}
+      {/* ─── corner brackets ─── */}
       <CornerBracket position="top-left" />
       <CornerBracket position="top-right" />
       <CornerBracket position="bottom-left" />
@@ -347,7 +413,6 @@ export function HUD({
 /*
  * ── Shared sub-components ──
  * The small pieces that make the HUD feel alive.
- * Each one is a tiny story: a number, a dot, a bracket.
  */
 
 function Readout({
@@ -378,14 +443,6 @@ function Readout({
 
 /*
  * 🏎️ VelocityTriad — three axes of planet-relative speed
- *
- * X = port/starboard drift
- * Y = vertical climb/descent
- * Z = forward/aft closing rate
- *
- * Each axis gets its own line because when you're
- * hurtling toward a planet at 14 su/s, you want to
- * know EXACTLY which direction "toward" is.
  */
 function VelocityTriad({
   xRef,
@@ -422,13 +479,25 @@ function VelocityTriad({
   );
 }
 
-function HelmKey({ label, desc }: { label: string; desc: string }) {
+function HelmKey({
+  label,
+  desc,
+  color = "cyan",
+}: {
+  label: string;
+  desc: string;
+  color?: "cyan" | "emerald";
+}) {
+  const colorClasses = color === "emerald"
+    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-400/80"
+    : "border-cyan-400/30 bg-cyan-400/10 text-cyan-400/80";
   return (
     <div className="flex items-center gap-1.5">
       <span
         className={cn(
           "inline-flex h-5 w-5 items-center justify-center rounded",
-          "border border-cyan-400/30 bg-cyan-400/10 font-mono text-[10px] text-cyan-400/80"
+          colorClasses,
+          "font-mono text-[10px]"
         )}
       >
         {label}
@@ -523,12 +592,43 @@ function HelmBracket({
   );
 }
 
+function SurfaceBracket({
+  position,
+}: {
+  position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+}) {
+  const posClass = {
+    "top-left": "top-10 left-10",
+    "top-right": "top-10 right-10",
+    "bottom-left": "bottom-10 left-10",
+    "bottom-right": "bottom-10 right-10",
+  }[position];
+
+  const borderClass = {
+    "top-left": "border-t border-l",
+    "top-right": "border-t border-r",
+    "bottom-left": "border-b border-l",
+    "bottom-right": "border-b border-r",
+  }[position];
+
+  return (
+    <div
+      className={cn(
+        "absolute h-10 w-10 border-emerald-400/25",
+        posClass,
+        borderClass
+      )}
+    />
+  );
+}
+
 /* ─── Props at the bottom, as is tradition ─── */
 
 interface HUDProps {
   locked: boolean;
-  navMode?: boolean;
+  controlMode?: ControlMode;
   isMobile?: boolean;
   shipWorldPosRef?: React.RefObject<THREE.Vector3>;
   shipVelocityRef?: React.RefObject<THREE.Vector3>;
+  landed?: boolean;
 }

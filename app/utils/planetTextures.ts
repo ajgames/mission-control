@@ -98,22 +98,69 @@ function generateSurfaceTexture(lod: number): THREE.CanvasTexture {
       ctx.fill();
     }
 
-    // 🏔️ mountain ridges — dark lines snaking across continents
+    /*
+     * 🏔️ Mountain ridges — the spines of continents
+     *
+     * Three passes to sell the illusion:
+     *   1. Broad dark shadow (the bulk of the range)
+     *   2. Bright snow-capped highlight (the peaks catch the sun)
+     *   3. Narrow dark crest line (the ridge itself)
+     *
+     * Like painting a Bob Ross mountain except he'd
+     * be horrified by how many happy little accidents
+     * we're generating procedurally.
+     */
     const ridgeRng = mulberry32(PLANET_SEED + 2000);
-    const ridgeCount = lod === 2 ? 8 : 20;
-    ctx.strokeStyle = "rgba(60, 50, 30, 0.4)";
-    ctx.lineWidth = (width / 512) * 1.5;
+    const ridgeCount = lod === 2 ? 12 : 28;
+    const scaleX = width / 512;
+    const scaleY = height / 256;
+
+    // store ridge paths so we can paint multiple passes
+    const ridgePaths: { x: number; y: number }[][] = [];
     for (let i = 0; i < ridgeCount; i++) {
-      ctx.beginPath();
-      let rx = ridgeRng() * width;
-      let ry = ridgeRng() * height;
-      ctx.moveTo(rx, ry);
-      const segments = 3 + Math.floor(ridgeRng() * 4);
+      const path: { x: number; y: number }[] = [];
+      path.push({ x: ridgeRng() * width, y: ridgeRng() * height });
+      const segments = 4 + Math.floor(ridgeRng() * 5);
       for (let s = 0; s < segments; s++) {
-        rx += (ridgeRng() - 0.5) * width * 0.15;
-        ry += (ridgeRng() - 0.5) * height * 0.1;
-        ctx.lineTo(rx, ry);
+        const prev = path[path.length - 1];
+        path.push({
+          x: prev.x + (ridgeRng() - 0.5) * width * 0.12,
+          y: prev.y + (ridgeRng() - 0.5) * height * 0.08,
+        });
       }
+      ridgePaths.push(path);
+    }
+
+    // pass 1: broad dark shadow — the mountain's footprint
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const path of ridgePaths) {
+      ctx.strokeStyle = "rgba(35, 30, 15, 0.5)";
+      ctx.lineWidth = scaleX * (lod === 2 ? 6 : 8);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let s = 1; s < path.length; s++) ctx.lineTo(path[s].x, path[s].y);
+      ctx.stroke();
+    }
+
+    // pass 2: snow highlight — offset upward, the peaks catching light
+    for (const path of ridgePaths) {
+      ctx.strokeStyle = `rgba(230, 225, 210, ${lod === 2 ? 0.35 : 0.5})`;
+      ctx.lineWidth = scaleX * (lod === 2 ? 3 : 4);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y - scaleY * 1.5);
+      for (let s = 1; s < path.length; s++)
+        ctx.lineTo(path[s].x, path[s].y - scaleY * 1.5);
+      ctx.stroke();
+    }
+
+    // pass 3: narrow dark crest — the razor edge
+    for (const path of ridgePaths) {
+      ctx.strokeStyle = "rgba(50, 40, 20, 0.6)";
+      ctx.lineWidth = scaleX * (lod === 2 ? 1.5 : 2);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let s = 1; s < path.length; s++) ctx.lineTo(path[s].x, path[s].y);
       ctx.stroke();
     }
   }
@@ -206,7 +253,97 @@ function generateCloudTexture(lod: number): THREE.CanvasTexture {
 }
 
 /**
- * generateAllLODTextures — precompute all 8 textures (4 surface + 4 cloud)
+ * generateBumpTexture — heightmap for 3D relief
+ *
+ * Bright = high elevation, dark = low.
+ * Ocean floor is dark. Continents are mid-gray.
+ * Mountains are white-hot peaks.
+ *
+ * When plugged into bumpMap, the shader uses this
+ * to perturb surface normals — so mountains catch
+ * light and cast micro-shadows. No geometry change,
+ * all illusion. Like contouring makeup, but for planets.
+ */
+function generateBumpTexture(lod: number): THREE.CanvasTexture {
+  const { width, height, continents } = LOD_CONFIG[lod];
+  const rng = mulberry32(PLANET_SEED);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+
+  // ocean floor — low elevation baseline
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(0, 0, width, height);
+
+  // land masses — medium elevation (same seed as surface texture!)
+  for (let i = 0; i < continents; i++) {
+    const brightness = 80 + Math.floor(rng() * 40);
+    ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
+    ctx.beginPath();
+    const x = rng() * width;
+    const y = rng() * height;
+    const rx = (15 + rng() * 40) * (width / 512);
+    const ry = (10 + rng() * 25) * (height / 256);
+    ctx.ellipse(x, y, rx, ry, rng() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // LOD 2+: mountain ridges — high elevation peaks
+  if (lod >= 2) {
+    // skip past the desert RNG calls to stay in sync
+    const _desertRng = mulberry32(PLANET_SEED + 1000);
+    const desertCount = lod === 2 ? 15 : 30;
+    for (let i = 0; i < desertCount; i++) {
+      _desertRng(); _desertRng(); _desertRng(); _desertRng(); _desertRng();
+    }
+
+    // mountain ridges — same paths as the surface texture
+    const ridgeRng = mulberry32(PLANET_SEED + 2000);
+    const ridgeCount = lod === 2 ? 12 : 28;
+    const scaleX = width / 512;
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let i = 0; i < ridgeCount; i++) {
+      const path: { x: number; y: number }[] = [];
+      path.push({ x: ridgeRng() * width, y: ridgeRng() * height });
+      const segments = 4 + Math.floor(ridgeRng() * 5);
+      for (let s = 0; s < segments; s++) {
+        const prev = path[path.length - 1];
+        path.push({
+          x: prev.x + (ridgeRng() - 0.5) * width * 0.12,
+          y: prev.y + (ridgeRng() - 0.5) * height * 0.08,
+        });
+      }
+
+      // broad base — medium-high elevation
+      ctx.strokeStyle = "rgb(160, 160, 160)";
+      ctx.lineWidth = scaleX * (lod === 2 ? 6 : 8);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let s = 1; s < path.length; s++) ctx.lineTo(path[s].x, path[s].y);
+      ctx.stroke();
+
+      // narrow peak — maximum elevation (white-hot)
+      ctx.strokeStyle = "rgb(220, 220, 220)";
+      ctx.lineWidth = scaleX * (lod === 2 ? 2 : 3);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let s = 1; s < path.length; s++) ctx.lineTo(path[s].x, path[s].y);
+      ctx.stroke();
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+/**
+ * generateAllLODTextures — precompute all 12 textures (4 surface + 4 cloud + 4 bump)
  *
  * Call once on mount. Returns arrays indexed by LOD level.
  * Transitions are instant material swaps — no loading spinners in space.
@@ -214,14 +351,17 @@ function generateCloudTexture(lod: number): THREE.CanvasTexture {
 export function generateAllLODTextures(): {
   surface: THREE.CanvasTexture[];
   cloud: THREE.CanvasTexture[];
+  bump: THREE.CanvasTexture[];
 } {
   const surface: THREE.CanvasTexture[] = [];
   const cloud: THREE.CanvasTexture[] = [];
+  const bump: THREE.CanvasTexture[] = [];
 
   for (let lod = 0; lod < 4; lod++) {
     surface.push(generateSurfaceTexture(lod));
     cloud.push(generateCloudTexture(lod));
+    bump.push(generateBumpTexture(lod));
   }
 
-  return { surface, cloud };
+  return { surface, cloud, bump };
 }

@@ -7,11 +7,17 @@ import {
   PLANET_LOCAL_POS,
   GM,
 } from "~/utils/grandnessEffect";
+import {
+  LANDING_HEIGHT,
+  EYE_HEIGHT,
+  SURFACE_MAX_RANGE,
+} from "~/utils/terrainNoise";
+import type { ControlMode } from "./Scene";
 
 /*
- * 🎮 Cabin Controls — now with HELM MODE
+ * 🎮 Cabin Controls — now with THREE modes
  * ────────────────────────────────────────────
- * Two lives in one component:
+ * Three lives in one component:
  *
  * 🚶 CABIN MODE (default)
  *   Click to lock. WASD to wander. Mouse to look.
@@ -19,32 +25,24 @@ import {
  *
  * 🚀 HELM MODE (press E)
  *   The camera snaps forward. You ARE the ship now.
- *
  *   WASD = thrust & strafe (with inertia — Newton's first!)
  *   Mouse = pitch & roll (because yaw is for amateurs)
  *   ESC or E = back to being a person
  *
- *   The Gemini is a gravity ship — six thruster arrays
- *   on every face, each one a swirling vortex of cyan.
- *   Movement has weight. Stopping takes effort.
- *   Every course correction costs momentum.
- *
- *        ┌─────────────────────────┐
- *        │    W = forward thrust   │
- *        │    S = reverse thrust   │
- *        │    A = strafe port      │
- *        │    D = strafe starboard │
- *        │                         │
- *        │    🖱️ X = roll          │
- *        │    🖱️ Y = pitch         │
- *        │    ESC / E = disengage  │
- *        └─────────────────────────┘
+ * 🌍 SURFACE MODE (press F when landed)
+ *   The hatch opens. You step outside.
+ *   WASD walks on the planet surface.
+ *   Mouse looks around relative to terrain-up.
+ *   Press F near the ship to re-board.
  *
  *   "She doesn't handle like a fighter.
- *    She handles like a cathedral that learned to fly."
+ *    She handles like a cathedral that learned to fly.
+ *    And now she's parked on alien soil."
  *
- * Also supports mobile:
- *   📱 D-pad / joystick for movement, touch-drag for look.
+ *        ┌─────────────────────────┐
+ *        │  cabin ─E→ helm ─F→ surface  │
+ *        │  cabin ←E─ helm ←F─ surface  │
+ *        └─────────────────────────┘
  */
 
 // ── cabin boundaries — the walls of the tin can ──
@@ -59,22 +57,35 @@ const MOUSE_SENSITIVITY = 0.002;
 const TOUCH_SENSITIVITY = 0.004;
 
 // ── helm physics — gravity ship feel ──
-// she's heavy. she drifts. she remembers where she was going.
 const HELM_THRUST = 14;
 const HELM_STRAFE = 12;
-const HELM_RADIAL_DRAG = 0.985; // heavy drag falling toward her — aerobraking vibes
-const HELM_TANGENTIAL_DRAG = 0.998; // gentle drag sideways — orbits persist, entropy is patient
+const HELM_RADIAL_DRAG = 0.985;
+const HELM_TANGENTIAL_DRAG = 0.998;
 const HELM_PITCH_SPEED = 0.0015;
 const HELM_ROLL_SPEED = 0.002;
-const HELM_ANGULAR_DRAG = 0.93; // rotational dampening — gyroscopes humming
+const HELM_ANGULAR_DRAG = 0.93;
 
 // the viewport seat — where the camera snaps when you take the helm
 const HELM_POSITION = new THREE.Vector3(0, 0.2, -7.5);
 
+// ── surface walking physics ──
+const SURFACE_SPEED = 6;
+const REBOARD_DISTANCE = 5; // how close you need to be to the ship to re-board
+
+// ── reusable math objects (no allocations in the frame loop) ──
+const _raycaster = new THREE.Raycaster();
+const _rayDir = new THREE.Vector3();
+const _rayOrigin = new THREE.Vector3();
+const _surfaceFwd = new THREE.Vector3();
+const _surfaceRight = new THREE.Vector3();
+const _surfaceUp = new THREE.Vector3();
+const _moveDir = new THREE.Vector3();
+const _tempV3 = new THREE.Vector3();
+
 export function CabinControls({
   onLockChange,
-  onNavModeChange,
-  navMode,
+  onControlModeChange,
+  controlMode = "cabin",
   isMobile = false,
   virtualKeys,
   joystick,
@@ -82,6 +93,8 @@ export function CabinControls({
   cockpitRef,
   shipWorldPosRef,
   shipVelocityRef,
+  terrainMeshRef,
+  onLandedChange,
 }: CabinControlsProps) {
   const { camera, gl } = useThree();
   const euler = useRef(new THREE.Euler(0, 0, 0, "YXZ"));
@@ -93,17 +106,30 @@ export function CabinControls({
   const lastTouch = useRef<{ x: number; y: number } | null>(null);
 
   // ── helm state — the ship's memory ──
-  const helmActive = useRef(false);
+  const modeRef = useRef<ControlMode>("cabin");
   const shipVelocity = useRef(new THREE.Vector3(0, 0, 0));
   const angularVelocity = useRef({ pitch: 0, roll: 0 });
   const shipQuaternion = useRef(new THREE.Quaternion());
   const savedCameraPos = useRef(new THREE.Vector3());
   const savedCameraQuat = useRef(new THREE.Quaternion());
 
-  // sync external nav mode → internal ref
+  // ── landing state ──
+  const landedRef = useRef(false);
+
+  // ── surface walking state ──
+  // position on the terrain in universe-space (absolute world pos)
+  const surfacePos = useRef(new THREE.Vector3());
+  const surfaceYaw = useRef(0);
+  const surfacePitch = useRef(0);
+  // the terrain-up direction at the landing point
+  const terrainUpRef = useRef(new THREE.Vector3(0, 1, 0));
+  // where the ship was when we disembarked (for distance check)
+  const shipLandingPos = useRef(new THREE.Vector3());
+
+  // sync external control mode → internal ref
   useEffect(() => {
-    helmActive.current = !!navMode;
-  }, [navMode]);
+    modeRef.current = controlMode;
+  }, [controlMode]);
 
   // 📱 on mobile, auto-engage — no cursor to lock, just vibes
   useEffect(() => {
@@ -113,11 +139,26 @@ export function CabinControls({
     }
   }, [isMobile, onLockChange]);
 
+  const setMode = useCallback(
+    (mode: ControlMode) => {
+      modeRef.current = mode;
+      onControlModeChange?.(mode);
+    },
+    [onControlModeChange]
+  );
+
+  const setLanded = useCallback(
+    (val: boolean) => {
+      landedRef.current = val;
+      onLandedChange?.(val);
+    },
+    [onLandedChange]
+  );
+
   const enterHelm = useCallback(() => {
-    if (helmActive.current) return;
+    if (modeRef.current === "helm") return;
 
     // 📸 save where the crew member was standing — in cockpit-local space
-    // so we can restore correctly even if the ship rotates during flight
     if (cockpitRef?.current) {
       const invQ = cockpitRef.current.quaternion.clone().invert();
       savedCameraPos.current
@@ -130,16 +171,12 @@ export function CabinControls({
       savedCameraQuat.current.copy(camera.quaternion);
     }
 
-    // snap to the viewport seat — inherit the ship's current heading
-    // (if the cockpit is already rotated from a previous flight,
-    //  the helm picks up where she left off. no whiplash.)
+    // snap to the viewport seat
     camera.position.copy(HELM_POSITION);
     if (cockpitRef?.current) {
       shipQuaternion.current.copy(cockpitRef.current.quaternion);
     } else {
-      const lookTarget = HELM_POSITION.clone().add(
-        new THREE.Vector3(0, 0, -1)
-      );
+      const lookTarget = HELM_POSITION.clone().add(new THREE.Vector3(0, 0, -1));
       camera.lookAt(lookTarget);
       shipQuaternion.current.copy(camera.quaternion);
     }
@@ -148,81 +185,142 @@ export function CabinControls({
     // reset velocities — clean slate, clean conscience
     shipVelocity.current.set(0, 0, 0);
     angularVelocity.current = { pitch: 0, roll: 0 };
+    setLanded(false);
 
-    helmActive.current = true;
-    onNavModeChange?.(true);
-  }, [camera, onNavModeChange, cockpitRef]);
+    setMode("helm");
+  }, [camera, cockpitRef, setMode, setLanded]);
 
   const exitHelm = useCallback(() => {
-    if (!helmActive.current) return;
+    if (modeRef.current !== "helm") return;
 
     /*
      * 🛬 Disembarking the helm — the ship keeps her heading.
-     *
-     * The crew member steps away from the controls but the
-     * cockpit stays tilted at whatever angle the ship ended
-     * up in. Walk around a slanted floor if you must —
+     * Walk around a slanted floor if you must —
      * that's what mag-boots are for.
-     *
-     * savedCameraPos/Quat are in cockpit-LOCAL space,
-     * so we transform them back to world using the cockpit's
-     * current orientation. The euler stays local too, so
-     * mouselook continues to work relative to the deck.
      */
-
     if (cockpitRef?.current) {
       const q = cockpitRef.current.quaternion;
       const p = cockpitRef.current.position;
-
-      // local → world position
       camera.position
         .copy(savedCameraPos.current)
         .applyQuaternion(q)
         .add(p);
-
-      // local → world quaternion
       camera.quaternion.copy(q).multiply(savedCameraQuat.current);
     } else {
       camera.position.copy(savedCameraPos.current);
       camera.quaternion.copy(savedCameraQuat.current);
     }
 
-    // euler tracks LOCAL orientation — cabin mouselook is deck-relative
     euler.current.setFromQuaternion(savedCameraQuat.current);
+    shipVelocity.current.set(0, 0, 0);
+    angularVelocity.current = { pitch: 0, roll: 0 };
+    setLanded(false);
 
-    // kill velocity — the ship parks wherever she drifted to
+    setMode("cabin");
+  }, [camera, cockpitRef, setMode, setLanded]);
+
+  /*
+   * 🌍 enterSurface — the hatch opens, the horizon beckons
+   *
+   * Camera drops to the terrain surface at eye height.
+   * The cockpit vanishes (hidden by Scene.tsx visibility toggle).
+   * You're standing on alien soil. The stars are above you.
+   * The ship is behind you. Everything smells like math.
+   */
+  const enterSurface = useCallback(() => {
+    if (modeRef.current !== "helm" || !landedRef.current) return;
+
+    // the terrain-up direction = from planet center toward the ship
+    if (shipWorldPosRef?.current) {
+      terrainUpRef.current
+        .copy(shipWorldPosRef.current)
+        .sub(PLANET_LOCAL_POS)
+        .normalize();
+    }
+
+    // save ship landing position for re-boarding distance check
+    if (shipWorldPosRef?.current) {
+      shipLandingPos.current.copy(shipWorldPosRef.current);
+    }
+
+    // place camera at ship position + eye height along terrain up
+    surfacePos.current.set(0, 0, 0);
+    if (shipWorldPosRef?.current) {
+      surfacePos.current.copy(shipWorldPosRef.current);
+    }
+
+    // initial look direction: ship's forward projected onto the terrain plane
+    const shipFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(shipQuaternion.current);
+    const up = terrainUpRef.current;
+    // project ship forward onto terrain plane
+    const projected = shipFwd.clone().addScaledVector(up, -shipFwd.dot(up)).normalize();
+    surfaceYaw.current = Math.atan2(projected.x, projected.z);
+    surfacePitch.current = 0;
+
+    // kill ship velocity — she's parked
     shipVelocity.current.set(0, 0, 0);
     angularVelocity.current = { pitch: 0, roll: 0 };
 
-    // NOTE: cockpitRef stays rotated. The ship keeps her heading.
-    // universeRef stays translated. shipWorldPos stays put.
+    setMode("surface");
+  }, [camera, shipWorldPosRef, setMode]);
 
-    helmActive.current = false;
-    onNavModeChange?.(false);
-  }, [camera, onNavModeChange, cockpitRef]);
+  /*
+   * 🚀 exitSurface — back to the tin can
+   *
+   * Re-enter the cockpit, restore cabin mode.
+   * The ship stays where she landed. The universe
+   * stays where it was. Only the human moves.
+   */
+  const exitSurface = useCallback(() => {
+    if (modeRef.current !== "surface") return;
+
+    // restore camera to cabin position
+    if (cockpitRef?.current) {
+      const q = cockpitRef.current.quaternion;
+      const p = cockpitRef.current.position;
+      camera.position
+        .copy(savedCameraPos.current)
+        .applyQuaternion(q)
+        .add(p);
+      camera.quaternion.copy(q).multiply(savedCameraQuat.current);
+    } else {
+      camera.position.copy(savedCameraPos.current);
+      camera.quaternion.copy(savedCameraQuat.current);
+    }
+
+    euler.current.setFromQuaternion(savedCameraQuat.current);
+
+    setMode("cabin");
+    setLanded(false);
+  }, [camera, cockpitRef, setMode, setLanded]);
 
   /* ─── Desktop: mouse look ─── */
   const onMouseMove = useCallback(
     (e: MouseEvent) => {
       if (!isLocked.current) return;
 
-      if (helmActive.current) {
-        /*
-         * 🎯 Helm mouse — pitch & roll
-         * Mouse-Y → pitch (nose up/down)
-         * Mouse-X → roll (barrel roll, baby)
-         *
-         * We accumulate angular velocity rather than setting
-         * orientation directly. The ship resists, then complies.
-         */
+      if (modeRef.current === "helm") {
         angularVelocity.current.pitch -= e.movementY * HELM_PITCH_SPEED;
         angularVelocity.current.roll -= e.movementX * HELM_ROLL_SPEED;
         return;
       }
 
+      if (modeRef.current === "surface") {
+        /*
+         * 🌍 Surface mouselook — yaw around terrain up, pitch around camera right
+         * Not world Y. Terrain-up. Because if the terrain is tilted,
+         * your sense of "up" should tilt with it.
+         */
+        surfaceYaw.current -= e.movementX * MOUSE_SENSITIVITY;
+        surfacePitch.current -= e.movementY * MOUSE_SENSITIVITY;
+        surfacePitch.current = Math.max(
+          -Math.PI / 2.5,
+          Math.min(Math.PI / 2.5, surfacePitch.current)
+        );
+        return;
+      }
+
       // cabin mode — euler is LOCAL (relative to the deck)
-      // compose with cockpit orientation so looking around
-      // feels natural even when the ship is banked at 30°
       euler.current.y -= e.movementX * MOUSE_SENSITIVITY;
       euler.current.x -= e.movementY * MOUSE_SENSITIVITY;
       euler.current.x = Math.max(
@@ -230,8 +328,7 @@ export function CabinControls({
         Math.min(Math.PI / 2.5, euler.current.x)
       );
       const localQ = new THREE.Quaternion().setFromEuler(euler.current);
-      const cockpitQ =
-        cockpitRef?.current?.quaternion ?? new THREE.Quaternion();
+      const cockpitQ = cockpitRef?.current?.quaternion ?? new THREE.Quaternion();
       camera.quaternion.copy(cockpitQ).multiply(localQ);
     },
     [camera, cockpitRef]
@@ -241,16 +338,25 @@ export function CabinControls({
     (e: KeyboardEvent) => {
       keys.current.add(e.code);
 
-      // 🔑 E = toggle the helm
+      // 🔑 E = toggle the helm (cabin ↔ helm)
       if (e.code === "KeyE" && isLocked.current) {
-        if (helmActive.current) {
+        if (modeRef.current === "helm") {
           exitHelm();
-        } else {
+        } else if (modeRef.current === "cabin") {
           enterHelm();
         }
       }
+
+      // 🔑 F = toggle surface mode (helm+landed → surface, surface → cabin)
+      if (e.code === "KeyF" && isLocked.current) {
+        if (modeRef.current === "helm" && landedRef.current) {
+          enterSurface();
+        } else if (modeRef.current === "surface") {
+          exitSurface();
+        }
+      }
     },
-    [enterHelm, exitHelm]
+    [enterHelm, exitHelm, enterSurface, exitSurface]
   );
 
   const onKeyUp = useCallback((e: KeyboardEvent) => {
@@ -262,11 +368,13 @@ export function CabinControls({
     isLocked.current = document.pointerLockElement === gl.domElement;
     onLockChange?.(isLocked.current);
 
-    // if pointer lock was lost while helming, exit helm too
-    if (wasLocked && !isLocked.current && helmActive.current) {
+    if (wasLocked && !isLocked.current && modeRef.current === "helm") {
       exitHelm();
     }
-  }, [gl.domElement, onLockChange, exitHelm]);
+    if (wasLocked && !isLocked.current && modeRef.current === "surface") {
+      exitSurface();
+    }
+  }, [gl.domElement, onLockChange, exitHelm, exitSurface]);
 
   const onClick = useCallback(() => {
     if (!isLocked.current && !isMobile) {
@@ -302,6 +410,13 @@ export function CabinControls({
       const dx = touch.clientX - lastTouch.current.x;
       const dy = touch.clientY - lastTouch.current.y;
       lastTouch.current = { x: touch.clientX, y: touch.clientY };
+
+      if (modeRef.current === "surface") {
+        surfaceYaw.current -= dx * TOUCH_SENSITIVITY;
+        surfacePitch.current -= dy * TOUCH_SENSITIVITY;
+        surfacePitch.current = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, surfacePitch.current));
+        return;
+      }
 
       euler.current.y -= dx * TOUCH_SENSITIVITY;
       euler.current.x -= dy * TOUCH_SENSITIVITY;
@@ -372,8 +487,9 @@ export function CabinControls({
     onTouchEnd,
   ]);
 
-  // 📱 track ButtonA press edge — so a single tap toggles helm
+  // 📱 track ButtonA / ButtonB press edges for mobile
   const buttonAWasDown = useRef(false);
+  const buttonBWasDown = useRef(false);
 
   /* ─── Frame loop ─── */
   useFrame((_, delta) => {
@@ -383,36 +499,142 @@ export function CabinControls({
     if (virtualKeys?.current) {
       const aDown = virtualKeys.current.has("ButtonA");
       if (aDown && !buttonAWasDown.current) {
-        if (helmActive.current) {
+        if (modeRef.current === "helm") {
           exitHelm();
-        } else {
+        } else if (modeRef.current === "cabin") {
           enterHelm();
         }
       }
       buttonAWasDown.current = aDown;
+
+      // ButtonB = F key (disembark/reboard)
+      const bDown = virtualKeys.current.has("ButtonB");
+      if (bDown && !buttonBWasDown.current) {
+        if (modeRef.current === "helm" && landedRef.current) {
+          enterSurface();
+        } else if (modeRef.current === "surface") {
+          exitSurface();
+        }
+      }
+      buttonBWasDown.current = bDown;
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🌍 SURFACE MODE — walking on the planet
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if (modeRef.current === "surface") {
+      const dt = Math.min(delta, 0.05);
+      const up = terrainUpRef.current;
+
+      /*
+       * 🧭 Build the surface coordinate frame
+       *
+       * Up = terrain normal (away from planet center)
+       * Forward = yaw rotation around Up, projected onto the terrain plane
+       * Right = cross product of Up and Forward
+       *
+       * This gives us a local reference frame that follows the
+       * curvature of the terrain. Walk north? That's north relative
+       * to where you're standing, not some cosmic absolute.
+       */
+
+      // forward direction on the surface plane from yaw
+      _surfaceFwd.set(
+        Math.sin(surfaceYaw.current),
+        0,
+        Math.cos(surfaceYaw.current)
+      );
+      // project onto terrain plane (remove up component)
+      _surfaceFwd.addScaledVector(up, -_surfaceFwd.dot(up)).normalize();
+
+      _surfaceRight.crossVectors(_surfaceFwd, up).normalize();
+      _surfaceUp.copy(up);
+
+      // ── movement input ──
+      _moveDir.set(0, 0, 0);
+      if (keys.current.has("KeyW")) _moveDir.addScaledVector(_surfaceFwd, 1);
+      if (keys.current.has("KeyS")) _moveDir.addScaledVector(_surfaceFwd, -1);
+      if (keys.current.has("KeyA")) _moveDir.addScaledVector(_surfaceRight, -1);
+      if (keys.current.has("KeyD")) _moveDir.addScaledVector(_surfaceRight, 1);
+
+      if (virtualKeys?.current) {
+        if (virtualKeys.current.has("KeyW")) _moveDir.addScaledVector(_surfaceFwd, 1);
+        if (virtualKeys.current.has("KeyS")) _moveDir.addScaledVector(_surfaceFwd, -1);
+        if (virtualKeys.current.has("KeyA")) _moveDir.addScaledVector(_surfaceRight, -1);
+        if (virtualKeys.current.has("KeyD")) _moveDir.addScaledVector(_surfaceRight, 1);
+      }
+
+      if (joystick?.current) {
+        _moveDir.addScaledVector(_surfaceRight, joystick.current.x);
+        _moveDir.addScaledVector(_surfaceFwd, -joystick.current.z);
+      }
+
+      if (_moveDir.lengthSq() > 0) {
+        _moveDir.clampLength(0, 1);
+        surfacePos.current.addScaledVector(_moveDir, SURFACE_SPEED * dt);
+      }
+
+      // ── boundary: max distance from ship landing point ──
+      _tempV3.copy(surfacePos.current).sub(shipLandingPos.current);
+      const distFromShip = _tempV3.length();
+      if (distFromShip > SURFACE_MAX_RANGE) {
+        _tempV3.normalize().multiplyScalar(SURFACE_MAX_RANGE);
+        surfacePos.current.copy(shipLandingPos.current).add(_tempV3);
+      }
+
+      // ── raycast down to snap to terrain height ──
+      const terrainMesh = terrainMeshRef?.current;
+      if (terrainMesh) {
+        // ray origin: current position + some height above terrain
+        _rayOrigin.copy(surfacePos.current).addScaledVector(up, 50);
+        _rayDir.copy(up).negate();
+        _raycaster.set(_rayOrigin, _rayDir);
+        _raycaster.far = 200;
+
+        const hits = _raycaster.intersectObject(terrainMesh, false);
+        if (hits.length > 0) {
+          // snap to terrain + eye height
+          surfacePos.current.copy(hits[0].point).addScaledVector(up, EYE_HEIGHT);
+        }
+      }
+
+      // ── update camera position and orientation ──
+      // camera goes where the universe-space position is, but offset by universe group translation
+      if (universeRef?.current) {
+        camera.position
+          .copy(surfacePos.current)
+          .add(universeRef.current.position);
+      } else {
+        camera.position.copy(surfacePos.current);
+      }
+
+      // build camera quaternion from terrain-up + yaw/pitch
+      // base orientation: align Y with terrain up
+      const baseQ = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        up
+      );
+      // yaw around terrain up
+      const yawQ = new THREE.Quaternion().setFromAxisAngle(up, surfaceYaw.current);
+      // pitch around local right
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(baseQ).applyQuaternion(yawQ);
+      const pitchQ = new THREE.Quaternion().setFromAxisAngle(right, surfacePitch.current);
+
+      camera.quaternion.copy(pitchQ).multiply(yawQ).multiply(baseQ);
+
+      // broadcast zero velocity in surface mode
+      if (shipVelocityRef?.current) {
+        shipVelocityRef.current.set(0, 0, 0);
+      }
+
+      return;
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 🚀 HELM MODE — you are the ship
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if (helmActive.current) {
-      /*
-       * Orbital mechanics physics loop:
-       *   1. Angular velocity → rotate ship
-       *   2. Thrust → accelerate (Zeno dampens in atmo only)
-       *   2b. Gravity → GM/r^2 toward the planet center
-       *   3. Decomposed drag → heavy radial, light tangential
-       *   4. Integrate position
-       *
-       * Thrust sideways. Build tangential velocity. Watch the
-       * HUD creep toward orbital speed. When it clicks, she
-       * settles into a gentle arc — the planet's terminator
-       * line sliding past your viewport like a slow sunrise.
-       *
-       * Orbits decay in 10-15 seconds. Tap thrust to maintain.
-       * The universe rewards intention, not inertia.
-       */
-      const dt = Math.min(delta, 0.05); // cap to prevent physics explosions on tab-switch
+    if (modeRef.current === "helm") {
+      const dt = Math.min(delta, 0.05);
 
       // ── 1. angular velocity → orientation ──
       const pitchQ = new THREE.Quaternion().setFromAxisAngle(
@@ -429,12 +651,10 @@ export function CabinControls({
       shipQuaternion.current.normalize();
       camera.quaternion.copy(shipQuaternion.current);
 
-      // damp angular velocity — gyro stabilizers humming
       const angDrag = Math.pow(HELM_ANGULAR_DRAG, dt * 60);
       angularVelocity.current.pitch *= angDrag;
       angularVelocity.current.roll *= angDrag;
 
-      // kill micro-drift — the ship comes to rest
       if (Math.abs(angularVelocity.current.pitch) < 0.00005)
         angularVelocity.current.pitch = 0;
       if (Math.abs(angularVelocity.current.roll) < 0.00005)
@@ -443,13 +663,11 @@ export function CabinControls({
       // ── 2. thrust → acceleration ──
       const thrust = new THREE.Vector3();
 
-      // physical keys
-      if (keys.current.has("KeyW")) thrust.z -= 1; // forward
-      if (keys.current.has("KeyS")) thrust.z += 1; // reverse
-      if (keys.current.has("KeyA")) thrust.x -= 1; // port
-      if (keys.current.has("KeyD")) thrust.x += 1; // starboard
+      if (keys.current.has("KeyW")) thrust.z -= 1;
+      if (keys.current.has("KeyS")) thrust.z += 1;
+      if (keys.current.has("KeyA")) thrust.x -= 1;
+      if (keys.current.has("KeyD")) thrust.x += 1;
 
-      // 📱 virtual D-pad (same mapping, different input)
       if (virtualKeys?.current) {
         if (virtualKeys.current.has("KeyW")) thrust.z -= 1;
         if (virtualKeys.current.has("KeyS")) thrust.z += 1;
@@ -457,7 +675,6 @@ export function CabinControls({
         if (virtualKeys.current.has("KeyD")) thrust.x += 1;
       }
 
-      // 📱 joystick (analog thrust — the finesse option)
       if (joystick?.current) {
         thrust.x += joystick.current.x;
         thrust.z += joystick.current.z;
@@ -465,67 +682,56 @@ export function CabinControls({
 
       if (thrust.lengthSq() > 0) {
         thrust.clampLength(0, 1);
-        // rotate thrust into ship's reference frame
         thrust.applyQuaternion(shipQuaternion.current);
 
-        /*
-         * 🌀 Zeno lives in the thermosphere now (< 20su).
-         * Out here in the vacuum, gravity does the talking.
-         * Zeno only speaks when you can smell the atmosphere.
-         */
         const surfDist = shipWorldPosRef?.current
           ? getDistanceToSurface(shipWorldPosRef.current)
           : 999;
         const zenoMult = computeZenoMultiplier(surfDist);
+
+        // if landed, only allow tangential thrust (no pushing through the ground)
+        if (landedRef.current) {
+          const up = _tempV3
+            .copy(shipWorldPosRef?.current ?? PLANET_LOCAL_POS)
+            .sub(PLANET_LOCAL_POS)
+            .normalize();
+          const downComponent = thrust.dot(up);
+          if (downComponent < 0) {
+            // trying to thrust into the ground — remove that component
+            thrust.addScaledVector(up, -downComponent);
+          }
+        }
 
         const mag =
           (Math.abs(thrust.z) > 0.5 ? HELM_THRUST : HELM_STRAFE) * zenoMult;
         shipVelocity.current.addScaledVector(thrust, mag * dt);
       }
 
-      /*
-       * 🍎 2b. gravity — Newton's patient hand
-       *
-       * She doesn't shout. She whispers. A gentle tug
-       * that you barely notice at 80su, but at 40su
-       * you're calculating escape velocity in your head.
-       *
-       * GM / r^2 — the oldest law in the book.
-       * The planet pulls. You choose what to do about it.
-       */
+      // 🍎 2b. gravity
       if (shipWorldPosRef?.current) {
         const toPlanet = PLANET_LOCAL_POS.clone().sub(shipWorldPosRef.current);
-        const rDist = Math.max(toPlanet.length(), 42); // clamp to avoid singularity at center
+        const rDist = Math.max(toPlanet.length(), 42);
         const gravAccel = GM / (rDist * rDist);
         const gravDir = toPlanet.normalize();
-        shipVelocity.current.addScaledVector(gravDir, gravAccel * dt);
+
+        // if landed, cancel gravity (terrain supports the ship)
+        if (!landedRef.current) {
+          shipVelocity.current.addScaledVector(gravDir, gravAccel * dt);
+        }
       }
 
-      /*
-       * ── 3. decomposed drag — the universe plays favorites ──
-       *
-       * Radial drag (0.985): falling toward her? the void resists.
-       *   Like atmospheric braking without the atmosphere.
-       *   Your approach bleeds speed. She makes you earn every meter.
-       *
-       * Tangential drag (0.998): orbiting? the void is generous.
-       *   Sideways momentum persists. Orbits live. Kepler smiles.
-       *   Tap thrust once, coast for 10 seconds. This is the way.
-       */
+      // ── 3. decomposed drag ──
       if (shipWorldPosRef?.current) {
         const toPlanet = PLANET_LOCAL_POS.clone().sub(shipWorldPosRef.current);
         const rDist = toPlanet.length();
 
         if (rDist > 0.1) {
-          const rHat = toPlanet.divideScalar(rDist); // unit radial vector
-
-          // project velocity onto radial and tangential components
+          const rHat = toPlanet.divideScalar(rDist);
           const vel = shipVelocity.current;
           const radialSpeed = vel.dot(rHat);
           const vRadial = rHat.clone().multiplyScalar(radialSpeed);
           const vTangential = vel.clone().sub(vRadial);
 
-          // apply asymmetric drag — heavy inward, featherlight sideways
           const radDrag = Math.pow(HELM_RADIAL_DRAG, dt * 60);
           const tanDrag = Math.pow(HELM_TANGENTIAL_DRAG, dt * 60);
 
@@ -534,23 +740,96 @@ export function CabinControls({
 
           vel.copy(vRadial).add(vTangential);
         } else {
-          // too close to center — uniform drag as fallback
-          shipVelocity.current.multiplyScalar(Math.pow(HELM_RADIAL_DRAG, dt * 60));
+          shipVelocity.current.multiplyScalar(
+            Math.pow(HELM_RADIAL_DRAG, dt * 60)
+          );
         }
       } else {
-        // no position ref — uniform drag
-        shipVelocity.current.multiplyScalar(Math.pow(HELM_RADIAL_DRAG, dt * 60));
+        shipVelocity.current.multiplyScalar(
+          Math.pow(HELM_RADIAL_DRAG, dt * 60)
+        );
       }
 
       if (shipVelocity.current.lengthSq() < 0.0001) {
         shipVelocity.current.set(0, 0, 0);
       }
 
-      // ── 4. integrate position & rotation ──
-      // camera is pinned to the helm seat
+      // ── 4. integrate position ──
       camera.position.copy(HELM_POSITION);
       if (shipWorldPosRef?.current) {
         shipWorldPosRef.current.addScaledVector(shipVelocity.current, dt);
+      }
+
+      // ── 4b. terrain collision — the ground is real now ──
+      const terrainMesh = terrainMeshRef?.current;
+      if (terrainMesh && shipWorldPosRef?.current) {
+        /*
+         * 🏔️ Raycast toward the planet center from the ship
+         *
+         * The terrain mesh lives in universe-space.
+         * The ship is at the origin (universe moves around it).
+         * So in scene-space, the terrain's world matrix accounts
+         * for the universe group's translation.
+         *
+         * We cast a ray from slightly above where we think we are,
+         * toward the planet center (in scene space), and check
+         * if the terrain catches us.
+         */
+        const planetScenePos = _tempV3
+          .copy(PLANET_LOCAL_POS)
+          .sub(shipWorldPosRef.current);
+
+        _rayDir.copy(planetScenePos).normalize();
+        _rayOrigin.copy(_rayDir).negate().multiplyScalar(2); // start from slightly above ship center
+        _raycaster.set(_rayOrigin, _rayDir);
+        _raycaster.far = 100;
+
+        const hits = _raycaster.intersectObject(terrainMesh, false);
+        if (hits.length > 0) {
+          const hitDist = hits[0].distance;
+          // hitDist is from rayOrigin to the surface
+          // we started 2 units above ship center, so terrain distance = hitDist - 2
+          const terrainDist = hitDist - 2;
+
+          if (terrainDist < LANDING_HEIGHT) {
+            /*
+             * 🛬 Contact! Push the ship back up.
+             *
+             * Kill radial velocity (the component toward the planet).
+             * Push ship position outward so it hovers at LANDING_HEIGHT.
+             * If velocity is nearly zero → we're landed.
+             */
+            const upDir = _rayDir.clone().negate(); // away from planet
+            const radialSpeed = shipVelocity.current.dot(_rayDir);
+            if (radialSpeed > 0) {
+              // remove inward velocity
+              shipVelocity.current.addScaledVector(_rayDir, -radialSpeed);
+            }
+
+            // push ship outward by the penetration amount
+            const pushAmount = LANDING_HEIGHT - terrainDist;
+            if (shipWorldPosRef.current) {
+              shipWorldPosRef.current.addScaledVector(upDir, pushAmount);
+            }
+
+            // check if we're truly landed (velocity near zero)
+            if (shipVelocity.current.lengthSq() < 0.5) {
+              if (!landedRef.current) {
+                setLanded(true);
+              }
+            }
+          } else if (terrainDist > LANDING_HEIGHT + 2) {
+            // we've taken off again
+            if (landedRef.current) {
+              setLanded(false);
+            }
+          }
+        } else {
+          // no terrain hit — we're flying free
+          if (landedRef.current) {
+            setLanded(false);
+          }
+        }
       }
 
       // universe slides opposite to where the ship is heading
@@ -563,17 +842,15 @@ export function CabinControls({
       }
 
       // cockpit rotates with the ship, pivoting around the helm seat
-      // so the walls, floor, and console all move with you as you pitch & roll
       if (cockpitRef?.current) {
         cockpitRef.current.quaternion.copy(shipQuaternion.current);
-        // pivot around HELM_POSITION: translate to pivot, rotate, translate back
         const offset = HELM_POSITION.clone().negate();
         offset.applyQuaternion(shipQuaternion.current);
         offset.add(HELM_POSITION);
         cockpitRef.current.position.copy(offset);
       }
 
-      // 📡 broadcast velocity so the HUD can show it
+      // broadcast velocity
       if (shipVelocityRef?.current) {
         shipVelocityRef.current.copy(shipVelocity.current);
       }
@@ -596,7 +873,6 @@ export function CabinControls({
     if (keys.current.has("KeyA")) direction.x -= 1;
     if (keys.current.has("KeyD")) direction.x += 1;
 
-    // virtual keys (D-pad buttons)
     if (virtualKeys?.current) {
       if (virtualKeys.current.has("KeyW")) direction.z -= 1;
       if (virtualKeys.current.has("KeyS")) direction.z += 1;
@@ -604,7 +880,6 @@ export function CabinControls({
       if (virtualKeys.current.has("KeyD")) direction.x += 1;
     }
 
-    // joystick (analog — preserves partial deflection for finesse)
     if (joystick?.current) {
       direction.x += joystick.current.x;
       direction.z += joystick.current.z;
@@ -614,21 +889,17 @@ export function CabinControls({
 
     direction.clampLength(0, 1);
 
-    // rotate movement to match LOCAL camera yaw (deck-relative facing)
     const yaw = new THREE.Euler(0, euler.current.y, 0, "YXZ");
     direction.applyEuler(yaw);
 
     const speed = MOVE_SPEED * delta;
 
-    // movement & bounds happen in cockpit-local space so walking
-    // feels natural even when the ship is banked or pitched
     const cockpitQ =
       cockpitRef?.current?.quaternion ?? new THREE.Quaternion();
     const cockpitP =
       cockpitRef?.current?.position ?? new THREE.Vector3();
     const cockpitQInv = cockpitQ.clone().invert();
 
-    // world → local
     const localPos = camera.position
       .clone()
       .sub(cockpitP)
@@ -638,29 +909,14 @@ export function CabinControls({
     localPos.y += direction.y * speed;
     localPos.z += direction.z * speed;
 
-    // clamp in local space — the walls are real even at a 45° bank
-    localPos.x = THREE.MathUtils.clamp(
-      localPos.x,
-      BOUNDS.x.min,
-      BOUNDS.x.max
-    );
-    localPos.y = THREE.MathUtils.clamp(
-      localPos.y,
-      BOUNDS.y.min,
-      BOUNDS.y.max
-    );
-    localPos.z = THREE.MathUtils.clamp(
-      localPos.z,
-      BOUNDS.z.min,
-      BOUNDS.z.max
-    );
+    localPos.x = THREE.MathUtils.clamp(localPos.x, BOUNDS.x.min, BOUNDS.x.max);
+    localPos.y = THREE.MathUtils.clamp(localPos.y, BOUNDS.y.min, BOUNDS.y.max);
+    localPos.z = THREE.MathUtils.clamp(localPos.z, BOUNDS.z.min, BOUNDS.z.max);
 
-    // local → world
     localPos.applyQuaternion(cockpitQ).add(cockpitP);
     camera.position.copy(localPos);
   });
 
-  // this component is invisible — it's all behavior, no geometry
   return null;
 }
 
@@ -668,8 +924,8 @@ export function CabinControls({
 
 interface CabinControlsProps {
   onLockChange?: (locked: boolean) => void;
-  onNavModeChange?: (navMode: boolean) => void;
-  navMode?: boolean;
+  onControlModeChange?: (mode: ControlMode) => void;
+  controlMode?: ControlMode;
   isMobile?: boolean;
   virtualKeys?: { current: Set<string> };
   joystick?: { current: { x: number; z: number } };
@@ -677,4 +933,6 @@ interface CabinControlsProps {
   cockpitRef?: React.RefObject<THREE.Group>;
   shipWorldPosRef?: React.RefObject<THREE.Vector3>;
   shipVelocityRef?: React.RefObject<THREE.Vector3>;
+  terrainMeshRef?: React.RefObject<THREE.Mesh | null>;
+  onLandedChange?: (landed: boolean) => void;
 }
