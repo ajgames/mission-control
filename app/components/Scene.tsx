@@ -51,6 +51,14 @@ export function Scene() {
   // 🛸 the cockpit group — rotates around the helm seat during flight
   const cockpitRef = useRef<THREE.Group>(null!);
 
+  // 📍 the ship's accumulated world position — shared between Planet and CabinControls
+  // so the planet knows how close you are and the controls know when to slow down
+  const shipWorldPosRef = useRef(new THREE.Vector3());
+
+  // 🏎️ the ship's velocity — how fast she's moving relative to the planet
+  // three numbers that tell you everything: am I closing, drifting, or falling?
+  const shipVelocityRef = useRef(new THREE.Vector3());
+
   // 🎵 the ship hums whether you're at the helm or not
   useAmbientAudio("/space-ambient-low.wav", locked);
 
@@ -79,6 +87,8 @@ export function Scene() {
           joystick={joystick}
           universeRef={universeRef}
           cockpitRef={cockpitRef}
+          shipWorldPosRef={shipWorldPosRef}
+          shipVelocityRef={shipVelocityRef}
         />
 
         {/* 🌌 the universe — this group moves when the ship flies */}
@@ -86,7 +96,7 @@ export function Scene() {
           <Nebula />
           <Sun />
           <Starfield />
-          <Planet />
+          <Planet shipWorldPosRef={shipWorldPosRef} />
           <Moon />
         </group>
 
@@ -97,11 +107,11 @@ export function Scene() {
       </Canvas>
 
       {/* HTML overlay — floating above the 3D like a ghost with opinions */}
-      <HUD locked={locked} navMode={navMode} isMobile={isMobile} />
+      <HUD locked={locked} navMode={navMode} isMobile={isMobile} shipWorldPosRef={shipWorldPosRef} shipVelocityRef={shipVelocityRef} />
 
       {/* 📱 mobile gamepad — for thumb-piloting through the cosmos */}
       {isMobile && locked && (
-        <MobileControls virtualKeys={virtualKeys} joystick={joystick} />
+        <MobileControls virtualKeys={virtualKeys} joystick={joystick} navMode={navMode} />
       )}
     </div>
   );

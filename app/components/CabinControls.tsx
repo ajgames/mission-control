@@ -4,6 +4,8 @@ import * as THREE from "three";
 import {
   getDistanceToSurface,
   computeZenoMultiplier,
+  PLANET_LOCAL_POS,
+  GM,
 } from "~/utils/grandnessEffect";
 
 /*
@@ -60,7 +62,8 @@ const TOUCH_SENSITIVITY = 0.004;
 // she's heavy. she drifts. she remembers where she was going.
 const HELM_THRUST = 14;
 const HELM_STRAFE = 12;
-const HELM_DRAG = 0.985; // velocity decays each frame — friction of the void
+const HELM_RADIAL_DRAG = 0.985; // heavy drag falling toward her — aerobraking vibes
+const HELM_TANGENTIAL_DRAG = 0.998; // gentle drag sideways — orbits persist, entropy is patient
 const HELM_PITCH_SPEED = 0.0015;
 const HELM_ROLL_SPEED = 0.002;
 const HELM_ANGULAR_DRAG = 0.93; // rotational dampening — gyroscopes humming
@@ -78,6 +81,7 @@ export function CabinControls({
   universeRef,
   cockpitRef,
   shipWorldPosRef,
+  shipVelocityRef,
 }: CabinControlsProps) {
   const { camera, gl } = useThree();
   const euler = useRef(new THREE.Euler(0, 0, 0, "YXZ"));
@@ -393,14 +397,20 @@ export function CabinControls({
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (helmActive.current) {
       /*
-       * Gravity ship physics loop:
-       *   1. Accumulate angular velocity → rotate ship
-       *   2. Read thrust → accelerate in ship-local space
-       *   3. Apply drag → the void has friction (handwavium)
+       * Orbital mechanics physics loop:
+       *   1. Angular velocity → rotate ship
+       *   2. Thrust → accelerate (Zeno dampens in atmo only)
+       *   2b. Gravity → GM/r^2 toward the planet center
+       *   3. Decomposed drag → heavy radial, light tangential
        *   4. Integrate position
        *
-       * She feels heavy but responsive. Push the stick,
-       * wait for her to answer, then feel her commit.
+       * Thrust sideways. Build tangential velocity. Watch the
+       * HUD creep toward orbital speed. When it clicks, she
+       * settles into a gentle arc — the planet's terminator
+       * line sliding past your viewport like a slow sunrise.
+       *
+       * Orbits decay in 10-15 seconds. Tap thrust to maintain.
+       * The universe rewards intention, not inertia.
        */
       const dt = Math.min(delta, 0.05); // cap to prevent physics explosions on tab-switch
 
@@ -459,37 +469,78 @@ export function CabinControls({
         thrust.applyQuaternion(shipQuaternion.current);
 
         /*
-         * 🌀 Zeno's Paradox — the closer you get, the harder it is to arrive
-         *
-         * Zeno walks toward the planet. Halfway there. Halfway again.
-         * His thrusters are screaming but math doesn't care.
-         * She grows impossibly large and you slow to a crawl.
-         *
-         * "I swear I'm getting closer."
-         * "You are. Just... asymptotically."
+         * 🌀 Zeno lives in the thermosphere now (< 20su).
+         * Out here in the vacuum, gravity does the talking.
+         * Zeno only speaks when you can smell the atmosphere.
          */
-        const planetDist = shipWorldPosRef?.current
+        const surfDist = shipWorldPosRef?.current
           ? getDistanceToSurface(shipWorldPosRef.current)
           : 999;
-        const zenoMult = computeZenoMultiplier(planetDist);
+        const zenoMult = computeZenoMultiplier(surfDist);
 
         const mag =
           (Math.abs(thrust.z) > 0.5 ? HELM_THRUST : HELM_STRAFE) * zenoMult;
         shipVelocity.current.addScaledVector(thrust, mag * dt);
       }
 
-      // ── 3. drag — nothing moves forever ──
-      // proximity drag: extra dampening near the planet so coasting doesn't
-      // cheat through the Zeno zone. Like flying through cosmic honey.
-      const planetDist = shipWorldPosRef?.current
-        ? getDistanceToSurface(shipWorldPosRef.current)
-        : 999;
-      const proximityDrag =
-        planetDist < 60
-          ? HELM_DRAG * (0.92 + 0.08 * Math.min(planetDist / 60, 1))
-          : HELM_DRAG;
-      const linDrag = Math.pow(proximityDrag, dt * 60);
-      shipVelocity.current.multiplyScalar(linDrag);
+      /*
+       * 🍎 2b. gravity — Newton's patient hand
+       *
+       * She doesn't shout. She whispers. A gentle tug
+       * that you barely notice at 80su, but at 40su
+       * you're calculating escape velocity in your head.
+       *
+       * GM / r^2 — the oldest law in the book.
+       * The planet pulls. You choose what to do about it.
+       */
+      if (shipWorldPosRef?.current) {
+        const toPlanet = PLANET_LOCAL_POS.clone().sub(shipWorldPosRef.current);
+        const rDist = Math.max(toPlanet.length(), 42); // clamp to avoid singularity at center
+        const gravAccel = GM / (rDist * rDist);
+        const gravDir = toPlanet.normalize();
+        shipVelocity.current.addScaledVector(gravDir, gravAccel * dt);
+      }
+
+      /*
+       * ── 3. decomposed drag — the universe plays favorites ──
+       *
+       * Radial drag (0.985): falling toward her? the void resists.
+       *   Like atmospheric braking without the atmosphere.
+       *   Your approach bleeds speed. She makes you earn every meter.
+       *
+       * Tangential drag (0.998): orbiting? the void is generous.
+       *   Sideways momentum persists. Orbits live. Kepler smiles.
+       *   Tap thrust once, coast for 10 seconds. This is the way.
+       */
+      if (shipWorldPosRef?.current) {
+        const toPlanet = PLANET_LOCAL_POS.clone().sub(shipWorldPosRef.current);
+        const rDist = toPlanet.length();
+
+        if (rDist > 0.1) {
+          const rHat = toPlanet.divideScalar(rDist); // unit radial vector
+
+          // project velocity onto radial and tangential components
+          const vel = shipVelocity.current;
+          const radialSpeed = vel.dot(rHat);
+          const vRadial = rHat.clone().multiplyScalar(radialSpeed);
+          const vTangential = vel.clone().sub(vRadial);
+
+          // apply asymmetric drag — heavy inward, featherlight sideways
+          const radDrag = Math.pow(HELM_RADIAL_DRAG, dt * 60);
+          const tanDrag = Math.pow(HELM_TANGENTIAL_DRAG, dt * 60);
+
+          vRadial.multiplyScalar(radDrag);
+          vTangential.multiplyScalar(tanDrag);
+
+          vel.copy(vRadial).add(vTangential);
+        } else {
+          // too close to center — uniform drag as fallback
+          shipVelocity.current.multiplyScalar(Math.pow(HELM_RADIAL_DRAG, dt * 60));
+        }
+      } else {
+        // no position ref — uniform drag
+        shipVelocity.current.multiplyScalar(Math.pow(HELM_RADIAL_DRAG, dt * 60));
+      }
 
       if (shipVelocity.current.lengthSq() < 0.0001) {
         shipVelocity.current.set(0, 0, 0);
@@ -522,7 +573,17 @@ export function CabinControls({
         cockpitRef.current.position.copy(offset);
       }
 
+      // 📡 broadcast velocity so the HUD can show it
+      if (shipVelocityRef?.current) {
+        shipVelocityRef.current.copy(shipVelocity.current);
+      }
+
       return;
+    }
+
+    // cabin mode = parked. zero out the velocity broadcast.
+    if (shipVelocityRef?.current) {
+      shipVelocityRef.current.set(0, 0, 0);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -615,4 +676,5 @@ interface CabinControlsProps {
   universeRef?: React.RefObject<THREE.Group>;
   cockpitRef?: React.RefObject<THREE.Group>;
   shipWorldPosRef?: React.RefObject<THREE.Vector3>;
+  shipVelocityRef?: React.RefObject<THREE.Vector3>;
 }

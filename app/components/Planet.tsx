@@ -1,6 +1,14 @@
 import { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { generateAllLODTextures } from "~/utils/planetTextures";
+import {
+  PLANET_LOCAL_POS,
+  PLANET_RADIUS,
+  getDistanceToSurface,
+  computeGrandnessScale,
+  getLODLevel,
+} from "~/utils/grandnessEffect";
 
 /*
  * 🪐 The Planet
@@ -14,97 +22,130 @@ import * as THREE from "three";
  *
  * The atmosphere shader gives her that thin blue halo —
  * fragile, like everything worth protecting.
+ *
+ * ╭──────────────────────────────────────────╮
+ * │  NEW: The Grandness Effect               │
+ * │                                          │
+ * │  Fly toward her. She grows exponentially. │
+ * │  Not perspective — actual scaling.        │
+ * │  At 130 units she's a marble.            │
+ * │  At 10 units she's a god.                │
+ * │                                          │
+ * │  Her textures sharpen as you approach:   │
+ * │  256px → 512px → 1024px → 2048px        │
+ * │  like the universe rewarding curiosity.  │
+ * ╰──────────────────────────────────────────╯
  */
 
-export function Planet() {
+export function Planet({ shipWorldPosRef }: PlanetProps) {
+  const groupRef = useRef<THREE.Group>(null!);
   const planetRef = useRef<THREE.Mesh>(null!);
   const cloudsRef = useRef<THREE.Mesh>(null!);
   const atmosphereRef = useRef<THREE.Mesh>(null!);
 
-  // procedural surface texture via canvas
-  const surfaceTexture = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 512;
-    canvas.height = 256;
-    const ctx = canvas.getContext("2d")!;
+  // current LOD tracked imperatively — no re-renders in the frame loop
+  const currentLOD = useRef(0);
 
-    // base ocean color
-    ctx.fillStyle = "#1a4a7a";
-    ctx.fillRect(0, 0, 512, 256);
-
-    // land masses — little continents scattered like dreams
-    const landColors = ["#2d5a1e", "#3a6b2a", "#4a7a35", "#5a8a45"];
-    for (let i = 0; i < 40; i++) {
-      ctx.fillStyle = landColors[Math.floor(Math.random() * landColors.length)];
-      ctx.beginPath();
-      const x = Math.random() * 512;
-      const y = Math.random() * 256;
-      const rx = 15 + Math.random() * 40;
-      const ry = 10 + Math.random() * 25;
-      ctx.ellipse(x, y, rx, ry, Math.random() * Math.PI, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // ice caps — cold but photogenic
-    ctx.fillStyle = "#ddeeff";
-    ctx.fillRect(0, 0, 512, 18);
-    ctx.fillRect(0, 238, 512, 18);
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-    return tex;
-  }, []);
-
-  const cloudTexture = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 512;
-    canvas.height = 256;
-    const ctx = canvas.getContext("2d")!;
-
-    ctx.clearRect(0, 0, 512, 256);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.0)";
-    ctx.fillRect(0, 0, 512, 256);
-
-    // wispy cloud patches
-    for (let i = 0; i < 80; i++) {
-      const alpha = 0.1 + Math.random() * 0.3;
-      ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-      ctx.beginPath();
-      const x = Math.random() * 512;
-      const y = Math.random() * 256;
-      const rx = 20 + Math.random() * 60;
-      const ry = 8 + Math.random() * 20;
-      ctx.ellipse(x, y, rx, ry, Math.random() * Math.PI, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-    return tex;
-  }, []);
+  // 🎨 precompute all LOD textures on mount — 4 surface + 4 cloud
+  // seeded PRNG keeps continents in the same spots across all tiers
+  const textures = useMemo(() => generateAllLODTextures(), []);
 
   useFrame((_, delta) => {
-    // planet rotates like she's got nowhere to be
-    planetRef.current.rotation.y += delta * 0.03;
-    cloudsRef.current.rotation.y += delta * 0.04;
-    atmosphereRef.current.rotation.y += delta * 0.01;
+    // ── The Grandness Effect ──
+    // surface distance — not center distance, because 40 units of rock matters
+    let scale = 1;
+    if (shipWorldPosRef?.current) {
+      const distance = getDistanceToSurface(shipWorldPosRef.current);
+
+      // 📏 exponential scaling — she grows beyond what perspective alone would give
+      scale = computeGrandnessScale(distance);
+      groupRef.current.scale.setScalar(scale);
+
+      /*
+       * 🎯 Scale from the near surface, not the center
+       * ──────────────────────────────────────────────
+       * Without this, the scaled sphere rushes TOWARD the camera
+       * and engulfs it. At scale=5× the visual radius is 200 units
+       * but the center is only 90 units away — you're inside the planet,
+       * looking at backfaces. She disappears. Poof. Not the vibe.
+       *
+       * The fix: push the center AWAY from the camera by R*(scale-1).
+       * The near surface stays pinned at its real distance.
+       * The far side balloons into infinity behind it.
+       *
+       * Result: approaching a real planet. She fills the viewport
+       * like a wall of terrain. You see curvature flatten into
+       * an endless horizon. Rivers appear. Mountains emerge.
+       * But she never clips through your windshield.
+       *
+       *   Before:  center stays → near surface rushes through you
+       *   After:   near surface stays → center retreats into the rock
+       */
+      if (scale > 1) {
+        const dirToShip = shipWorldPosRef.current.clone()
+          .sub(PLANET_LOCAL_POS)
+          .normalize();
+        const pushback = PLANET_RADIUS * (scale - 1);
+        groupRef.current.position.set(
+          PLANET_LOCAL_POS.x - dirToShip.x * pushback,
+          PLANET_LOCAL_POS.y - dirToShip.y * pushback,
+          PLANET_LOCAL_POS.z - dirToShip.z * pushback,
+        );
+      } else {
+        groupRef.current.position.copy(PLANET_LOCAL_POS);
+      }
+
+      // 🔍 LOD swap — textures sharpen as you approach
+      const newLOD = getLODLevel(distance);
+      if (newLOD !== currentLOD.current) {
+        currentLOD.current = newLOD;
+
+        // imperative material swap — no React re-renders, just raw GPU joy
+        const planetMat = planetRef.current
+          .material as THREE.MeshStandardMaterial;
+        const cloudMat = cloudsRef.current
+          .material as THREE.MeshStandardMaterial;
+
+        planetMat.map = textures.surface[newLOD];
+        planetMat.needsUpdate = true;
+        cloudMat.map = textures.cloud[newLOD];
+        cloudMat.needsUpdate = true;
+      }
+    }
+
+    /*
+     * 🌀 Rotation scales inversely with grandness
+     * ────────────────────────────────────────────
+     * A marble spins fast. A world barely moves.
+     *
+     * At scale=1 she's a marble — leisurely spin.
+     * At scale=500 she's a world — the surface is still,
+     * continents crawling at geological pace.
+     * At scale=2000 you'd need a timelapse to notice.
+     *
+     * This is what sells the horizon. A spinning ball
+     * screams "I'm a 3D model!" A still surface
+     * whispers "you're actually here."
+     */
+    const rotSpeed = 1 / scale;
+    planetRef.current.rotation.y += delta * 0.03 * rotSpeed;
+    cloudsRef.current.rotation.y += delta * 0.04 * rotSpeed;
+    atmosphereRef.current.rotation.y += delta * 0.01 * rotSpeed;
   });
 
   return (
-    <group position={[30, 5, -120]}>
-      {/* the planet herself */}
+    <group ref={groupRef} position={[PLANET_LOCAL_POS.x, PLANET_LOCAL_POS.y, PLANET_LOCAL_POS.z]}>
+      {/* the planet herself — starts at LOD 0 (distant marble) */}
       <mesh ref={planetRef}>
         <sphereGeometry args={[40, 64, 64]} />
-        <meshStandardMaterial map={surfaceTexture} roughness={0.8} />
+        <meshStandardMaterial map={textures.surface[0]} roughness={0.8} />
       </mesh>
 
       {/* cloud layer — slightly larger, slightly mysterious */}
       <mesh ref={cloudsRef}>
         <sphereGeometry args={[40.3, 64, 64]} />
         <meshStandardMaterial
-          map={cloudTexture}
+          map={textures.cloud[0]}
           transparent
           opacity={0.6}
           depthWrite={false}
@@ -123,4 +164,10 @@ export function Planet() {
       </mesh>
     </group>
   );
+}
+
+/* ─── Props at the bottom, as is tradition ─── */
+
+interface PlanetProps {
+  shipWorldPosRef?: React.RefObject<THREE.Vector3>;
 }

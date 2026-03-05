@@ -1,7 +1,7 @@
 import { useRef, useEffect } from "react";
 import * as THREE from "three";
 import { cn } from "~/utils";
-import { getVisualDistanceToSurface } from "~/utils/grandnessEffect";
+import { getVisualDistanceToSurface, PLANET_LOCAL_POS, GM } from "~/utils/grandnessEffect";
 
 /*
  * 📡 The HUD (Heads-Up Display)
@@ -25,6 +25,7 @@ export function HUD({
   navMode,
   isMobile = false,
   shipWorldPosRef,
+  shipVelocityRef,
 }: HUDProps) {
   /*
    * 📏 Live distance readout — updated imperatively via rAF
@@ -35,11 +36,26 @@ export function HUD({
   const distanceElRef = useRef<HTMLSpanElement>(null);
   const cabinDistanceElRef = useRef<HTMLSpanElement>(null);
 
+  // 🏎️ velocity readout refs — three axes, two HUD modes, all updated imperatively
+  // because six setState calls at 60fps is how you make React cry
+  const velXRef = useRef<HTMLSpanElement>(null);
+  const velYRef = useRef<HTMLSpanElement>(null);
+  const velZRef = useRef<HTMLSpanElement>(null);
+  const cabinVelXRef = useRef<HTMLSpanElement>(null);
+  const cabinVelYRef = useRef<HTMLSpanElement>(null);
+  const cabinVelZRef = useRef<HTMLSpanElement>(null);
+
+  // 🛸 orbital velocity readout — the number that tells you if you're flying or falling
+  const orbVelElRef = useRef<HTMLSpanElement>(null);
+  const orbTargetElRef = useRef<HTMLSpanElement>(null);
+  const orbPercentElRef = useRef<HTMLSpanElement>(null);
+
   useEffect(() => {
     if (!shipWorldPosRef) return;
 
     let frameId: number;
     const tick = () => {
+      // 📏 distance
       if (shipWorldPosRef.current) {
         const d = getVisualDistanceToSurface(shipWorldPosRef.current);
         const text = d.toFixed(1);
@@ -47,11 +63,54 @@ export function HUD({
         if (cabinDistanceElRef.current)
           cabinDistanceElRef.current.textContent = text;
       }
+
+      // 🏎️ velocity — planet-relative, three axes
+      if (shipVelocityRef?.current) {
+        const v = shipVelocityRef.current;
+        const vx = v.x.toFixed(2);
+        const vy = v.y.toFixed(2);
+        const vz = v.z.toFixed(2);
+        if (velXRef.current) velXRef.current.textContent = vx;
+        if (velYRef.current) velYRef.current.textContent = vy;
+        if (velZRef.current) velZRef.current.textContent = vz;
+        if (cabinVelXRef.current) cabinVelXRef.current.textContent = vx;
+        if (cabinVelYRef.current) cabinVelYRef.current.textContent = vy;
+        if (cabinVelZRef.current) cabinVelZRef.current.textContent = vz;
+
+        /*
+         * 🛸 Orbital velocity decomposition
+         * ──────────────────────────────────
+         * Split velocity into radial (toward/away from planet)
+         * and tangential (sideways / orbital). The tangential
+         * component is the one that keeps you in orbit.
+         * When it matches sqrt(GM/r), you're Kepler's favorite.
+         */
+        if (shipWorldPosRef?.current) {
+          const toPlanet = PLANET_LOCAL_POS.clone().sub(shipWorldPosRef.current);
+          const r = toPlanet.length();
+          if (r > 0.1) {
+            const rHat = toPlanet.divideScalar(r);
+            const radialSpeed = v.dot(rHat);
+            const vTan = v.clone().addScaledVector(rHat, -radialSpeed);
+            const tangentialSpeed = vTan.length();
+            const orbitalSpeed = Math.sqrt(GM / r);
+            const pct = Math.round((tangentialSpeed / orbitalSpeed) * 100);
+
+            if (orbVelElRef.current)
+              orbVelElRef.current.textContent = tangentialSpeed.toFixed(1);
+            if (orbTargetElRef.current)
+              orbTargetElRef.current.textContent = orbitalSpeed.toFixed(1);
+            if (orbPercentElRef.current)
+              orbPercentElRef.current.textContent = String(pct);
+          }
+        }
+      }
+
       frameId = requestAnimationFrame(tick);
     };
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
-  }, [shipWorldPosRef]);
+  }, [shipWorldPosRef, shipVelocityRef]);
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // 🚀 HELM HUD — flight instruments
@@ -101,9 +160,12 @@ export function HUD({
               </div>
             </div>
           </div>
-          <Readout label="VEL" value="0.00" unit="m/s" />
-          <Readout label="HDG" value="000" unit="°" />
-          <Readout label="PITCH" value="0.0" unit="°" />
+          {/* 🏎️ velocity relative to the planet — three axes of truth */}
+          <VelocityTriad
+            xRef={velXRef}
+            yRef={velYRef}
+            zRef={velZRef}
+          />
         </div>
 
         {/* ─── right panel — ship systems ─── */}
@@ -117,6 +179,27 @@ export function HUD({
             <div className="text-sm text-white/80">
               <span ref={distanceElRef}>--</span>
               <span className="ml-1 text-[10px] text-white/40">su</span>
+            </div>
+          </div>
+          {/*
+           * 🛸 ORB — the orbital velocity gauge
+           * Shows tangential speed / target orbital speed
+           * When the numbers match, you're in orbit.
+           * When they don't, you're just falling with style.
+           */}
+          <div className="font-mono text-right">
+            <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
+              ORB
+            </div>
+            <div className="text-sm text-white/80">
+              <span ref={orbVelElRef}>0.0</span>
+              <span className="mx-1 text-[10px] text-white/30">/</span>
+              <span ref={orbTargetElRef} className="text-cyan-400/70">0.0</span>
+              <span className="ml-1 text-[10px] text-white/40">su/s</span>
+            </div>
+            <div className="text-[9px] text-white/30">
+              <span ref={orbPercentElRef}>0</span>
+              <span>% orbital</span>
             </div>
           </div>
           <Readout label="FUEL" value="87" unit="%" align="right" />
@@ -202,7 +285,12 @@ export function HUD({
       {/* ─── left readouts ─── */}
       <div className="absolute top-1/2 left-8 -translate-y-1/2 space-y-4">
         <Readout label="ALT" value="340.2" unit="km" />
-        <Readout label="VEL" value="7.66" unit="km/s" />
+        {/* 🏎️ planet-relative velocity — even from the cabin you can feel the drift */}
+        <VelocityTriad
+          xRef={cabinVelXRef}
+          yRef={cabinVelYRef}
+          zRef={cabinVelZRef}
+        />
         <Readout label="FUEL" value="87" unit="%" />
       </div>
 
@@ -284,6 +372,52 @@ function Readout({
           <span className="ml-1 text-[10px] text-white/40">{unit}</span>
         )}
       </div>
+    </div>
+  );
+}
+
+/*
+ * 🏎️ VelocityTriad — three axes of planet-relative speed
+ *
+ * X = port/starboard drift
+ * Y = vertical climb/descent
+ * Z = forward/aft closing rate
+ *
+ * Each axis gets its own line because when you're
+ * hurtling toward a planet at 14 su/s, you want to
+ * know EXACTLY which direction "toward" is.
+ */
+function VelocityTriad({
+  xRef,
+  yRef,
+  zRef,
+  align = "left",
+}: {
+  xRef: React.RefObject<HTMLSpanElement | null>;
+  yRef: React.RefObject<HTMLSpanElement | null>;
+  zRef: React.RefObject<HTMLSpanElement | null>;
+  align?: "left" | "right";
+}) {
+  return (
+    <div className={cn("font-mono space-y-0.5", align === "right" && "text-right")}>
+      <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">
+        VEL
+      </div>
+      <div className="space-y-px text-xs text-white/80">
+        <div>
+          <span className="text-[9px] text-white/30 mr-1">X</span>
+          <span ref={xRef}>0.00</span>
+        </div>
+        <div>
+          <span className="text-[9px] text-white/30 mr-1">Y</span>
+          <span ref={yRef}>0.00</span>
+        </div>
+        <div>
+          <span className="text-[9px] text-white/30 mr-1">Z</span>
+          <span ref={zRef}>0.00</span>
+        </div>
+      </div>
+      <div className="text-[9px] text-white/25">su/s</div>
     </div>
   );
 }
@@ -396,4 +530,5 @@ interface HUDProps {
   navMode?: boolean;
   isMobile?: boolean;
   shipWorldPosRef?: React.RefObject<THREE.Vector3>;
+  shipVelocityRef?: React.RefObject<THREE.Vector3>;
 }

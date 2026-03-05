@@ -33,6 +33,7 @@ import { cn } from "~/utils";
 export function MobileControls({
   virtualKeys,
   joystick,
+  navMode = false,
 }: MobileControlsProps) {
   return (
     <div className="pointer-events-none absolute inset-0 z-20">
@@ -40,14 +41,14 @@ export function MobileControls({
       <div className="absolute bottom-0 left-0 right-0 flex items-end justify-between p-5 pb-8">
         {/* left cluster: D-pad + Joystick */}
         <div className="pointer-events-auto flex items-end gap-4">
-          <DPad virtualKeys={virtualKeys} />
+          <DPad virtualKeys={virtualKeys} navMode={navMode} />
           <Joystick stickRef={joystick} />
         </div>
 
-        {/* right cluster: A/B buttons */}
+        {/* right cluster: helm toggle + action */}
         <div className="pointer-events-auto flex flex-col items-center gap-3">
           <ActionButton
-            label="A"
+            label={navMode ? "⏏" : "E"}
             virtualKey="ButtonA"
             virtualKeys={virtualKeys}
             color="cyan"
@@ -60,13 +61,22 @@ export function MobileControls({
           />
         </div>
       </div>
+
+      {/* 📱 helm mode label — so mobile pilots know what's happening */}
+      {navMode && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2">
+          <span className="font-mono text-[10px] tracking-[0.2em] text-cyan-400/50 uppercase">
+            Helm engaged · tap E to disengage
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
 /* ─── D-Pad ─── */
 
-function DPad({ virtualKeys }: { virtualKeys: { current: Set<string> } }) {
+function DPad({ virtualKeys, navMode }: { virtualKeys: { current: Set<string> }; navMode: boolean }) {
   const press = (key: string) => {
     navigator.vibrate?.(10);
     virtualKeys.current.add(key);
@@ -75,30 +85,30 @@ function DPad({ virtualKeys }: { virtualKeys: { current: Set<string> } }) {
 
   return (
     <div className="relative h-[130px] w-[130px]">
-      {/* up */}
+      {/* up / forward thrust */}
       <DPadButton
-        arrow="▲"
+        arrow={navMode ? "⟰" : "▲"}
         className="absolute top-0 left-1/2 -translate-x-1/2"
         onPress={() => press("KeyW")}
         onRelease={() => release("KeyW")}
       />
-      {/* left */}
+      {/* left / port strafe */}
       <DPadButton
-        arrow="◀"
+        arrow={navMode ? "⟸" : "◀"}
         className="absolute top-1/2 left-0 -translate-y-1/2"
         onPress={() => press("KeyA")}
         onRelease={() => release("KeyA")}
       />
-      {/* right */}
+      {/* right / starboard strafe */}
       <DPadButton
-        arrow="▶"
+        arrow={navMode ? "⟹" : "▶"}
         className="absolute top-1/2 right-0 -translate-y-1/2"
         onPress={() => press("KeyD")}
         onRelease={() => release("KeyD")}
       />
-      {/* down */}
+      {/* down / reverse thrust */}
       <DPadButton
-        arrow="▼"
+        arrow={navMode ? "⟱" : "▼"}
         className="absolute bottom-0 left-1/2 -translate-x-1/2"
         onPress={() => press("KeyS")}
         onRelease={() => release("KeyS")}
@@ -312,4 +322,5 @@ function ActionButton({
 interface MobileControlsProps {
   virtualKeys: { current: Set<string> };
   joystick: { current: { x: number; z: number } };
+  navMode?: boolean;
 }
