@@ -8,6 +8,8 @@ import {
   getDistanceToSurface,
   computeGrandnessScale,
   getLODLevel,
+  TERRAIN_APPEAR_DIST,
+  TERRAIN_OPAQUE_DIST,
 } from "~/utils/grandnessEffect";
 
 /*
@@ -24,16 +26,23 @@ import {
  * fragile, like everything worth protecting.
  *
  * ╭──────────────────────────────────────────╮
- * │  NEW: The Grandness Effect               │
+ * │  The Grandness Effect + Non-Euclidean    │
  * │                                          │
  * │  Fly toward her. She grows exponentially. │
  * │  Not perspective — actual scaling.        │
  * │  At 130 units she's a marble.            │
  * │  At 10 units she's a god.                │
+ * │  At 5 units she's gone.                  │
  * │                                          │
- * │  Her textures sharpen as you approach:   │
- * │  256px → 512px → 1024px → 2048px        │
- * │  like the universe rewarding curiosity.  │
+ * │  That last one is the trick.             │
+ * │  As the terrain plane fades IN,          │
+ * │  the sphere fades OUT. Cross-dissolve.   │
+ * │  Curved world → flat ground.             │
+ * │  The non-Euclidean sleight of hand.      │
+ * │                                          │
+ * │  You never see the transition because    │
+ * │  there IS no transition. Just two things │
+ * │  trading places in the dark.             │
  * ╰──────────────────────────────────────────╯
  */
 
@@ -112,6 +121,77 @@ export function Planet({ shipWorldPosRef }: PlanetProps) {
         planetMat.needsUpdate = true;
         cloudMat.map = textures.cloud[newLOD];
         cloudMat.needsUpdate = true;
+      }
+
+      /*
+       * 🎭 The Non-Euclidean Cross-Fade
+       * ──────────────────────────────────
+       * This is where the magic happens.
+       *
+       * As the terrain plane fades in (d: 10→5),
+       * the sphere fades out. When the terrain is fully
+       * opaque, the sphere is invisible. You're looking
+       * at a flat surface where a curved one used to be.
+       *
+       * The viewer never notices because:
+       *   1. At 330× scale, the curvature is already 1/13,200
+       *   2. The terrain is positioned exactly at the tangent point
+       *   3. The cross-fade happens while you're busy
+       *      fighting the Zeno field
+       *
+       * It's like the Theseus paradox but for geometry.
+       * At what point did the sphere become a plane?
+       * Answer: it didn't. You just stopped looking.
+       *
+       *   sphere opacity:  1.0 ████████░░░░ 0.0
+       *   terrain opacity: 0.0 ░░░░████████ 1.0
+       *                        d=10        d=5
+       */
+      if (distance < TERRAIN_APPEAR_DIST) {
+        const fadeT = Math.max(
+          0,
+          Math.min(
+            1,
+            (TERRAIN_APPEAR_DIST - distance) /
+              (TERRAIN_APPEAR_DIST - TERRAIN_OPAQUE_DIST)
+          )
+        );
+        // sphere dissolves as terrain solidifies
+        const sphereOpacity = 1 - fadeT;
+
+        const planetMat = planetRef.current
+          .material as THREE.MeshStandardMaterial;
+        const cloudMat = cloudsRef.current
+          .material as THREE.MeshStandardMaterial;
+        const atmosMat = atmosphereRef.current
+          .material as THREE.MeshBasicMaterial;
+
+        planetMat.opacity = sphereOpacity;
+        planetMat.transparent = true;
+        planetMat.depthWrite = sphereOpacity > 0.5;
+
+        cloudMat.opacity = 0.6 * sphereOpacity;
+        atmosMat.opacity = 0.12 * sphereOpacity;
+
+        // once fully faded, hide entirely — no ghost fragments
+        groupRef.current.visible = sphereOpacity > 0.01;
+      } else {
+        // full opacity — she's a marble, she's proud
+        const planetMat = planetRef.current
+          .material as THREE.MeshStandardMaterial;
+        const atmosMat = atmosphereRef.current
+          .material as THREE.MeshBasicMaterial;
+
+        planetMat.opacity = 1;
+        planetMat.transparent = false;
+        planetMat.depthWrite = true;
+
+        const cloudMat = cloudsRef.current
+          .material as THREE.MeshStandardMaterial;
+        cloudMat.opacity = 0.6;
+        atmosMat.opacity = 0.12;
+
+        groupRef.current.visible = true;
       }
     }
 

@@ -1,7 +1,7 @@
 import { useRef, useEffect } from "react";
 import * as THREE from "three";
 import { cn } from "~/utils";
-import { getVisualDistanceToSurface, PLANET_LOCAL_POS, GM } from "~/utils/grandnessEffect";
+import { getVisualDistanceToSurface, computeOrbitalMetrics } from "~/utils/grandnessEffect";
 import type { ControlMode } from "./Scene";
 
 /*
@@ -79,22 +79,14 @@ export function HUD({
 
         // orbital velocity decomposition
         if (shipWorldPosRef?.current) {
-          const toPlanet = PLANET_LOCAL_POS.clone().sub(shipWorldPosRef.current);
-          const r = toPlanet.length();
-          if (r > 0.1) {
-            const rHat = toPlanet.divideScalar(r);
-            const radialSpeed = v.dot(rHat);
-            const vTan = v.clone().addScaledVector(rHat, -radialSpeed);
-            const tangentialSpeed = vTan.length();
-            const orbitalSpeed = Math.sqrt(GM / r);
-            const pct = Math.round((tangentialSpeed / orbitalSpeed) * 100);
-
+          const metrics = computeOrbitalMetrics(shipWorldPosRef.current, v);
+          if (metrics) {
             if (orbVelElRef.current)
-              orbVelElRef.current.textContent = tangentialSpeed.toFixed(1);
+              orbVelElRef.current.textContent = metrics.tangentialSpeed.toFixed(1);
             if (orbTargetElRef.current)
-              orbTargetElRef.current.textContent = orbitalSpeed.toFixed(1);
+              orbTargetElRef.current.textContent = metrics.orbitalSpeed.toFixed(1);
             if (orbPercentElRef.current)
-              orbPercentElRef.current.textContent = String(pct);
+              orbPercentElRef.current.textContent = String(metrics.orbitalPercent);
           }
         }
       }

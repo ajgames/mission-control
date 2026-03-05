@@ -31,25 +31,7 @@ export const MAX_HEIGHT = 8;
 export const TREE_COUNT = 600;
 export const ROCK_COUNT = 300;
 
-// ── human proportions on the surface ──
-export const EYE_HEIGHT = 1.7;
-export const SURFACE_MAX_RANGE = 200;
-export const LANDING_HEIGHT = 1.0;
-
-// ── seeded PRNG — same planet, same mountains, every time ──
-// (Mulberry32: borrowed from planetTextures.ts — small, fast, deterministic)
-function mulberry32(seed: number) {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// the terrain's DNA — seeded offset from the planet seed
-const TERRAIN_SEED = 42 + 4000;
+import { mulberry32, TERRAIN_SEED } from "./prng";
 
 /*
  * 🎲 Permutation table — the secret sauce of value noise

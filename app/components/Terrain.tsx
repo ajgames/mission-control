@@ -182,9 +182,67 @@ export function Terrain({
     }
   });
 
+  /*
+   * 🌫️ Atmospheric fog — the horizon dissolves into haze
+   *
+   * Without this, the terrain is a 500×500 postage stamp
+   * floating in the void. WITH this, the edges fade into
+   * a blue-grey atmosphere that matches the planet's glow.
+   *
+   * The fog is injected via onBeforeCompile — we splice
+   * distance-based color blending into the fragment shader.
+   * Far terrain fragments lerp toward the atmosphere color.
+   * The result: the ground appears to extend to infinity.
+   *
+   * You can't see where the terrain ends because
+   * the atmosphere swallowed the evidence.
+   *
+   *   near ████████████████░░░░░░░░ far
+   *        ▲ sharp detail  ▲ haze
+   *
+   *   "What lies beyond the horizon?"
+   *   "More horizon. Always more horizon."
+   */
+  const fogMaterialProps = useMemo(() => ({
+    onBeforeCompile: (shader: THREE.WebGLProgramParametersWithUniforms) => {
+      shader.uniforms.uFogColor = { value: new THREE.Color("#6b8dad") };
+      shader.uniforms.uFogNear = { value: 60.0 };
+      shader.uniforms.uFogFar = { value: 220.0 };
+
+      // inject varying into vertex shader
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <common>",
+        `#include <common>
+         varying float vFogDist;`
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <fog_vertex>",
+        `#include <fog_vertex>
+         vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+         vFogDist = length(mvPos.xyz);`
+      );
+
+      // inject fog blending into fragment shader
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <common>",
+        `#include <common>
+         uniform vec3 uFogColor;
+         uniform float uFogNear;
+         uniform float uFogFar;
+         varying float vFogDist;`
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <dithering_fragment>",
+        `#include <dithering_fragment>
+         float fogFactor = smoothstep(uFogNear, uFogFar, vFogDist);
+         gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, fogFactor);`
+      );
+    },
+  }), []);
+
   return (
     <group ref={groupRef} visible={false}>
-      {/* the ground itself — noise-displaced plane */}
+      {/* the ground itself — noise-displaced plane with atmospheric haze */}
       <mesh ref={meshRef} geometry={geometry} receiveShadow>
         <meshStandardMaterial
           ref={materialRef}
@@ -194,6 +252,7 @@ export function Terrain({
           opacity={0}
           depthWrite
           side={THREE.DoubleSide}
+          {...fogMaterialProps}
         />
       </mesh>
 
@@ -365,16 +424,7 @@ function populateInstances(
   mesh.instanceMatrix.needsUpdate = true;
 }
 
-// ── seeded PRNG — same seed, same forest, every time ──
-function mulberry32(seed: number) {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { mulberry32 } from "~/utils/prng";
 
 /* ─── Props at the bottom, as is tradition ─── */
 

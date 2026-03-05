@@ -23,17 +23,7 @@ import * as THREE from "three";
  *     └────────────────────────────────────┘
  */
 
-// ── seeded PRNG — same seed, same planet, every time ──
-// (Mulberry32: small, fast, deterministic)
-function mulberry32(seed: number) {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { mulberry32, PLANET_SEED } from "./prng";
 
 // ── LOD configuration ──
 const LOD_CONFIG = [
@@ -43,8 +33,39 @@ const LOD_CONFIG = [
   { width: 2048, height: 1024, continents: 160, clouds: 200 },
 ] as const;
 
-// the planet's DNA — change this number, change her face
-const PLANET_SEED = 42;
+/*
+ * 🏔️ generateRidgePaths — the spines of continents
+ *
+ * Both surface and bump textures need the same ridge geometry
+ * so mountains look like they have both color AND relief.
+ * This function generates the paths once from the ridge seed,
+ * independent of any other PRNG sequences.
+ */
+function generateRidgePaths(
+  lod: number,
+  width: number,
+  height: number
+): { x: number; y: number }[][] {
+  const ridgeRng = mulberry32(PLANET_SEED + 2000);
+  const ridgeCount = lod === 2 ? 12 : 28;
+  const paths: { x: number; y: number }[][] = [];
+
+  for (let i = 0; i < ridgeCount; i++) {
+    const path: { x: number; y: number }[] = [];
+    path.push({ x: ridgeRng() * width, y: ridgeRng() * height });
+    const segments = 4 + Math.floor(ridgeRng() * 5);
+    for (let s = 0; s < segments; s++) {
+      const prev = path[path.length - 1];
+      path.push({
+        x: prev.x + (ridgeRng() - 0.5) * width * 0.12,
+        y: prev.y + (ridgeRng() - 0.5) * height * 0.08,
+      });
+    }
+    paths.push(path);
+  }
+
+  return paths;
+}
 
 /**
  * generateSurfaceTexture — procedural continents, oceans, and ice
@@ -101,35 +122,14 @@ function generateSurfaceTexture(lod: number): THREE.CanvasTexture {
     /*
      * 🏔️ Mountain ridges — the spines of continents
      *
-     * Three passes to sell the illusion:
+     * Three passes to sell the illusion (Bob Ross would weep):
      *   1. Broad dark shadow (the bulk of the range)
      *   2. Bright snow-capped highlight (the peaks catch the sun)
      *   3. Narrow dark crest line (the ridge itself)
-     *
-     * Like painting a Bob Ross mountain except he'd
-     * be horrified by how many happy little accidents
-     * we're generating procedurally.
      */
-    const ridgeRng = mulberry32(PLANET_SEED + 2000);
-    const ridgeCount = lod === 2 ? 12 : 28;
+    const ridgePaths = generateRidgePaths(lod, width, height);
     const scaleX = width / 512;
     const scaleY = height / 256;
-
-    // store ridge paths so we can paint multiple passes
-    const ridgePaths: { x: number; y: number }[][] = [];
-    for (let i = 0; i < ridgeCount; i++) {
-      const path: { x: number; y: number }[] = [];
-      path.push({ x: ridgeRng() * width, y: ridgeRng() * height });
-      const segments = 4 + Math.floor(ridgeRng() * 5);
-      for (let s = 0; s < segments; s++) {
-        const prev = path[path.length - 1];
-        path.push({
-          x: prev.x + (ridgeRng() - 0.5) * width * 0.12,
-          y: prev.y + (ridgeRng() - 0.5) * height * 0.08,
-        });
-      }
-      ridgePaths.push(path);
-    }
 
     // pass 1: broad dark shadow — the mountain's footprint
     ctx.lineCap = "round";
@@ -292,32 +292,12 @@ function generateBumpTexture(lod: number): THREE.CanvasTexture {
 
   // LOD 2+: mountain ridges — high elevation peaks
   if (lod >= 2) {
-    // skip past the desert RNG calls to stay in sync
-    const _desertRng = mulberry32(PLANET_SEED + 1000);
-    const desertCount = lod === 2 ? 15 : 30;
-    for (let i = 0; i < desertCount; i++) {
-      _desertRng(); _desertRng(); _desertRng(); _desertRng(); _desertRng();
-    }
-
-    // mountain ridges — same paths as the surface texture
-    const ridgeRng = mulberry32(PLANET_SEED + 2000);
-    const ridgeCount = lod === 2 ? 12 : 28;
+    const ridgePaths = generateRidgePaths(lod, width, height);
     const scaleX = width / 512;
 
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    for (let i = 0; i < ridgeCount; i++) {
-      const path: { x: number; y: number }[] = [];
-      path.push({ x: ridgeRng() * width, y: ridgeRng() * height });
-      const segments = 4 + Math.floor(ridgeRng() * 5);
-      for (let s = 0; s < segments; s++) {
-        const prev = path[path.length - 1];
-        path.push({
-          x: prev.x + (ridgeRng() - 0.5) * width * 0.12,
-          y: prev.y + (ridgeRng() - 0.5) * height * 0.08,
-        });
-      }
-
+    for (const path of ridgePaths) {
       // broad base — medium-high elevation
       ctx.strokeStyle = "rgb(160, 160, 160)";
       ctx.lineWidth = scaleX * (lod === 2 ? 6 : 8);

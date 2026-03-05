@@ -52,6 +52,21 @@ export const TERRAIN_OPAQUE_DIST = 5;
 export const LANDING_DIST = 3;
 
 /*
+ * 🧍 Surface constants — the human scale
+ * ─────────────────────────────────────────
+ * Once the pilot walks outside, physics shrinks
+ * from orbital mechanics to boot-on-dirt metrics.
+ *
+ * EYE_HEIGHT: camera altitude above terrain (meters-ish)
+ * LANDING_HEIGHT: how close the ship sits to the ground
+ * SURFACE_MAX_RANGE: the leash — wander farther and you
+ *   get pulled back. Like a tether, but made of math.
+ */
+export const EYE_HEIGHT = 1.7;
+export const LANDING_HEIGHT = 1.0;
+export const SURFACE_MAX_RANGE = 200;
+
+/*
  * 🍎 GM — the gravitational parameter
  * ────────────────────────────────────
  * Newton's apple, but in space. No tree required.
@@ -145,6 +160,38 @@ export function computeZenoMultiplier(surfaceDistance: number): number {
   if (surfaceDistance >= 20) return 1.0;
   const t = (Math.max(surfaceDistance, 2) - 2) / 18;
   return 0.01 + 0.99 * t * t * t;
+}
+
+/**
+ * computeOrbitalMetrics — decompose velocity into orbital components
+ *
+ * Splits the ship's velocity into radial (toward/away from planet)
+ * and tangential (sideways, the part that keeps you in orbit).
+ *
+ * Returns null if too close to the planet center for meaningful math.
+ * Otherwise: tangentialSpeed, orbitalSpeed (ideal circular orbit),
+ * and orbitalPercent (how close you are to staying up).
+ *
+ *   100% = stable orbit. You're not going anywhere.
+ *   50%  = you're falling with style.
+ *   0%   = straight down. Enjoy the view.
+ */
+export function computeOrbitalMetrics(
+  shipPos: Vector3,
+  velocity: Vector3
+): { tangentialSpeed: number; orbitalSpeed: number; orbitalPercent: number } | null {
+  const toPlanet = PLANET_LOCAL_POS.clone().sub(shipPos);
+  const r = toPlanet.length();
+  if (r <= 0.1) return null;
+
+  const rHat = toPlanet.divideScalar(r);
+  const radialSpeed = velocity.dot(rHat);
+  const vTan = velocity.clone().addScaledVector(rHat, -radialSpeed);
+  const tangentialSpeed = vTan.length();
+  const orbitalSpeed = Math.sqrt(GM / r);
+  const orbitalPercent = Math.round((tangentialSpeed / orbitalSpeed) * 100);
+
+  return { tangentialSpeed, orbitalSpeed, orbitalPercent };
 }
 
 /**

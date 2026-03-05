@@ -1,6 +1,11 @@
 import { useState, useRef, useCallback } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
+import {
+  getDistanceToSurface,
+  TERRAIN_APPEAR_DIST,
+  TERRAIN_OPAQUE_DIST,
+} from "~/utils/grandnessEffect";
 import { Starfield } from "./Starfield";
 import { Planet } from "./Planet";
 import { Sun } from "./Sun";
@@ -84,6 +89,15 @@ export function Scene() {
         camera={{ position: [0, 0, 5], fov: 70, near: 0.1, far: 2000 }}
         gl={{ antialias: true, alpha: false }}
       >
+        {/* 🌫️ atmospheric adapter — adjusts FOV, fog, and far plane
+         *  based on proximity to the planet surface.
+         *  This is the perceptual glue that sells the transition.
+         */}
+        <AtmosphericAdapter
+          shipWorldPosRef={shipWorldPosRef}
+          controlMode={controlMode}
+        />
+
         {/* ambient light — enough to see the walls have walls */}
         <ambientLight intensity={0.2} color="#2a1f4e" />
 
@@ -146,6 +160,105 @@ export function Scene() {
       )}
     </div>
   );
+}
+
+/*
+ * 🌫️ AtmosphericAdapter — the non-Euclidean glue
+ * ────────────────────────────────────────────────
+ * Runs inside the Canvas (useFrame access).
+ * As the ship approaches the planet:
+ *
+ *   1. FOV widens 70° → 85° — the world feels bigger
+ *   2. Scene fog fades in — the background becomes atmospheric
+ *   3. Far plane extends on surface — terrain needs room to render
+ *
+ * On surface mode, the fog thickens and the FOV locks wide.
+ * The sky isn't black anymore. There's a world here.
+ *
+ *   space:   ★ ★ ★ ★ ★ (FOV 70, no fog, blackness)
+ *   descent: ★ ★ · · · (FOV 75, light haze)
+ *   landed:  · · · · · (FOV 82, thick atmosphere)
+ *   surface: ~~~~~~~~~ (FOV 85, full atmospheric haze)
+ */
+function AtmosphericAdapter({
+  shipWorldPosRef,
+  controlMode,
+}: {
+  shipWorldPosRef: React.RefObject<THREE.Vector3>;
+  controlMode: ControlMode;
+}) {
+  const { camera, scene } = useThree();
+
+  useFrame(() => {
+    if (!shipWorldPosRef?.current) return;
+
+    const perspCam = camera as THREE.PerspectiveCamera;
+    const surfDist = getDistanceToSurface(shipWorldPosRef.current);
+
+    if (controlMode === "surface") {
+      // on the surface — full atmospheric presence
+      perspCam.fov = THREE.MathUtils.lerp(perspCam.fov, 85, 0.05);
+      perspCam.far = 800;
+      perspCam.near = 0.05;
+
+      // thick atmospheric fog
+      if (!scene.fog || !(scene.fog instanceof THREE.Fog)) {
+        scene.fog = new THREE.Fog("#3d5a7a", 80, 350);
+      }
+      const fog = scene.fog as THREE.Fog;
+      fog.color.lerp(new THREE.Color("#3d5a7a"), 0.05);
+      fog.near = THREE.MathUtils.lerp(fog.near, 80, 0.05);
+      fog.far = THREE.MathUtils.lerp(fog.far, 350, 0.05);
+    } else if (surfDist < TERRAIN_APPEAR_DIST) {
+      // approaching — gradual transition
+      const t = Math.max(
+        0,
+        Math.min(
+          1,
+          (TERRAIN_APPEAR_DIST - surfDist) /
+            (TERRAIN_APPEAR_DIST - TERRAIN_OPAQUE_DIST)
+        )
+      );
+
+      // FOV widens as you descend — the world expands around you
+      const targetFOV = 70 + t * 15; // 70° → 85°
+      perspCam.fov = THREE.MathUtils.lerp(perspCam.fov, targetFOV, 0.05);
+      perspCam.far = 2000 + t * 600; // extend for terrain
+      perspCam.near = 0.1 - t * 0.05; // tighten near plane
+
+      // atmospheric fog fades in
+      if (t > 0.05) {
+        if (!scene.fog || !(scene.fog instanceof THREE.Fog)) {
+          scene.fog = new THREE.Fog("#3d5a7a", 600, 2000);
+        }
+        const fog = scene.fog as THREE.Fog;
+        // fog gets closer as you descend
+        const fogNear = 600 - t * 500;   // 600 → 100
+        const fogFar = 2000 - t * 1500;  // 2000 → 500
+        fog.near = THREE.MathUtils.lerp(fog.near, fogNear, 0.03);
+        fog.far = THREE.MathUtils.lerp(fog.far, fogFar, 0.03);
+        fog.color.lerp(new THREE.Color("#3d5a7a"), 0.03);
+      }
+    } else {
+      // in space — restore defaults
+      perspCam.fov = THREE.MathUtils.lerp(perspCam.fov, 70, 0.05);
+      perspCam.far = 2000;
+      perspCam.near = 0.1;
+      // dissolve fog
+      if (scene.fog && scene.fog instanceof THREE.Fog) {
+        const fog = scene.fog as THREE.Fog;
+        fog.near = THREE.MathUtils.lerp(fog.near, 2000, 0.05);
+        fog.far = THREE.MathUtils.lerp(fog.far, 3000, 0.05);
+        if (fog.near > 1900) {
+          scene.fog = null;
+        }
+      }
+    }
+
+    perspCam.updateProjectionMatrix();
+  });
+
+  return null;
 }
 
 /* ─── Types at the bottom, as is tradition ─── */

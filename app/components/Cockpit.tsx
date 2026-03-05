@@ -1,6 +1,7 @@
 import { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { usePulse } from "~/hooks/usePulse";
 import {
   createWallNormalMap,
   createWallRoughnessMap,
@@ -377,16 +378,13 @@ function CeilingPaneling({
 function CeilingLightBar({ z }: { z: number }) {
   const leftRef = useRef<THREE.Mesh>(null!);
   const rightRef = useRef<THREE.Mesh>(null!);
-  const elapsed = useRef(0);
+  const pulse = usePulse(0.6, z * 0.3, 1.0, 0.25);
 
-  useFrame((_, delta) => {
-    elapsed.current += delta;
-    const t = elapsed.current * 0.6 + z * 0.3;
-    const intensity = 1.0 + Math.sin(t) * 0.25;
+  useFrame(() => {
     for (const ref of [leftRef, rightRef]) {
       if (ref.current) {
         (ref.current.material as THREE.MeshStandardMaterial).emissiveIntensity =
-          intensity;
+          pulse.current;
       }
     }
   });
@@ -444,16 +442,13 @@ function WallLightBar({ side, z }: { side: "left" | "right"; z: number }) {
   const ref = useRef<THREE.Mesh>(null!);
   const x = side === "left" ? -11.4 : 11.4;
   const glowX = side === "left" ? -11.35 : 11.35;
-  const offset = side === "left" ? 0 : Math.PI;
+  const phaseOffset = (side === "left" ? 0 : Math.PI) + z * 0.5;
+  const pulse = usePulse(0.4, phaseOffset, 0.8, 0.2);
 
-  const elapsed = useRef(0);
-
-  useFrame((_, delta) => {
-    elapsed.current += delta;
+  useFrame(() => {
     if (ref.current) {
       const mat = ref.current.material as THREE.MeshStandardMaterial;
-      mat.emissiveIntensity =
-        0.8 + Math.sin(elapsed.current * 0.4 + offset + z * 0.5) * 0.2;
+      mat.emissiveIntensity = pulse.current;
     }
   });
 
@@ -636,15 +631,12 @@ function Pedestal({
   index: number;
 }) {
   const glowRef = useRef<THREE.Mesh>(null!);
+  const pulse = usePulse(0.6, index * 1.1, 0.7, 0.3);
 
-  const elapsed = useRef(0);
-
-  useFrame((_, delta) => {
-    elapsed.current += delta;
+  useFrame(() => {
     if (glowRef.current) {
       const mat = glowRef.current.material as THREE.MeshStandardMaterial;
-      mat.emissiveIntensity =
-        0.7 + Math.sin(elapsed.current * 0.6 + index * 1.1) * 0.3;
+      mat.emissiveIntensity = pulse.current;
     }
   });
 
@@ -732,18 +724,15 @@ function Pedestal({
  */
 function ViewportGlow() {
   const ref = useRef<THREE.Group>(null!);
+  const pulse = usePulse(0.8, 0, 1.2, 0.4);
 
-  const elapsed = useRef(0);
-
-  useFrame((_, delta) => {
-    elapsed.current += delta;
+  useFrame(() => {
     if (ref.current) {
-      const intensity = 1.2 + Math.sin(elapsed.current * 0.8) * 0.4;
       ref.current.children.forEach((child) => {
         const mesh = child as THREE.Mesh;
         if (mesh.material) {
           (mesh.material as THREE.MeshStandardMaterial).emissiveIntensity =
-            intensity;
+            pulse.current;
         }
       });
     }
